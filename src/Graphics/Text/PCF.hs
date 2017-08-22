@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-module Graphics.Text.PCF (PCF, loadPCF, decodePCF) where
+{-# LANGUAGE NamedFieldPuns #-}
+module Graphics.Text.PCF (PCF, PCFGlyph, loadPCF, decodePCF, getPCFGlyph, getGlyphString) where
 
 import Data.Binary
 import Data.Binary.Get
@@ -12,10 +13,17 @@ import qualified Data.Map.Strict as M
 import Data.Monoid
 import Control.Monad
 import Data.ByteString.Lazy (ByteString)
+import Data.Vector (Vector, (!))
 import GHC.Int
 import GHC.Exts
+import Data.Char
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy.Char8 as BC
 import qualified Data.ByteString.Lazy as B
+import qualified Data.Vector as V
+import Data.IntMap (IntMap)
+import qualified Data.IntMap as IntMap
+import Data.Tuple
 
 assert :: Monad m => Bool -> String -> m ()
 assert True  = const $ return ()
@@ -25,8 +33,70 @@ allUnique :: Eq a => [a] -> Bool
 allUnique [] = True
 allUnique (x:xs) = x `notElem` xs && allUnique xs
 
+-- | Lookup a PCF table by its type.
+lookupTable :: PCF -> PCFTableType -> Maybe (TableMeta, Table)
+lookupTable (PCF ts) = flip M.lookup $ M.fromList $ map f ts
+    where
+        f entry@(TableMeta{..},_) = (tableMetaType, entry)
+
+getGlyphString :: PCF -> ByteString
+getGlyphString (PCF ts) = glyph_names_string
+    where
+        lookup = flip M.lookup $ M.fromList $ map (\(x, y) -> (tableMetaType x, y)) ts
+        Just (GLYPH_NAMES{..}) = lookup PCF_GLYPH_NAMES
+
+
+-- getPCFGlyph :: PCF -> Char -> (Char, Int, Int, Int, Int, Metrics, Bool, Word8, Int)
+-- (c, pitch, rows, bytes, offset, a, (tableMetaFormat x .&. 0xFFFFFF00) == 0x00000100, tableMetaGlyphPad, w)
+getPCFGlyph :: PCF -> Char -> Maybe PCFGlyph
+getPCFGlyph pcf c = do
+        (meta_bitmap, BITMAPS{..})  <- lookupTable pcf PCF_BITMAPS
+        (meta_metrics, METRICS{..}) <- lookupTable pcf PCF_METRICS
+        (_, BDF_ENCODINGS{..})      <- lookupTable pcf PCF_BDF_ENCODINGS
+        glyph_index <- fromIntegral <$> ord c `IntMap.lookup` encodings_glyph_indices
+        Metrics{..} <- metrics_metrics V.!? glyph_index
+        let bytes = fromIntegral $ rows * pitch
+            rows = fromIntegral $ metrics_character_ascent + metrics_character_descent
+            w = fromIntegral $ metrics_right_sided_bearings - metrics_left_sided_bearings
+            pitch = case tableMetaGlyphPad meta_bitmap of
+                    1 -> (w + 7) `shiftR` 3
+                    2 -> ((w + 15) `shiftR` 4) `shiftL` 1
+                    4 -> ((w + 31) `shiftR` 5) `shiftL` 2
+                    8 -> ((w + 63) `shiftR` 6) `shiftL` 3
+        offset <- fmap fromIntegral $ bitmaps_offsets V.!? glyph_index
+        return $ PCFGlyph c w rows (fromIntegral $ tableMetaGlyphPad meta_bitmap) (B.take bytes $ B.drop offset $ bitmaps_data)
+    where
+
+
 data PCF = PCF [(TableMeta, Table)]
     deriving (Show)
+
+data PCFGlyph = PCFGlyph { glyph_char :: Char
+                         , glyph_width :: Int
+                         , glyph_height :: Int
+                         , glyph_padding :: Int
+                         , glyph_bitmap :: ByteString }
+    deriving (Eq)
+
+instance Show PCFGlyph where
+    show PCFGlyph{..} = "PCFGlyph {glyph_char = " ++ show glyph_char ++
+                        ", glyph_width = " ++ show glyph_width ++
+                        ", glyph_height = " ++ show glyph_height ++
+                        ", glyph_bitmap = " ++ show glyph_bitmap ++ "}\n" ++
+
+                        (BC.unpack $ mconcat $ map ((<> "\n") . bitStrEncode) rs)
+        where
+            
+            rs = rows glyph_bitmap
+            rows bs = case B.splitAt 4 bs of
+                    (r, "") -> [r]
+                    (r, t) -> r : rows t
+                    
+            pitch = fromIntegral $ case glyph_padding of
+                        1 -> (glyph_width + 7) `shiftR` 3
+                        2 -> (glyph_width + 15) `shiftR` 4 `shiftL` 1
+                        4 -> (glyph_width + 31) `shiftR` 5 `shiftL` 2
+                        8 -> (glyph_width + 63) `shiftR` 6 `shiftL` 3
 
 data Prop = Prop { prop_name_offset :: Word32
                  , prop_is_string :: Word8
@@ -36,12 +106,12 @@ data Prop = Prop { prop_name_offset :: Word32
 data Table = PROPERTIES { properties_props :: [Prop]
                         , properties_strings :: ByteString }
            | BITMAPS { bitmaps_glyph_count :: Word32
-                     , bitmaps_offsets :: [Word32]
+                     , bitmaps_offsets :: Vector Word32
                      , bitmaps_sizes :: (Word32, Word32, Word32, Word32)
                      , bitmaps_data :: ByteString }
            | METRICS { metrics_ink_type :: Bool
                      , metrics_compressed :: Bool
-                     , metrics_metrics :: [Metrics] }
+                     , metrics_metrics :: Vector Metrics }
            | SWIDTHS { swidths_swidths :: [Word32] }
            | ACCELERATORS { accel_no_overlap :: Bool
                           , accel_constant_metrics :: Bool
@@ -63,8 +133,7 @@ data Table = PROPERTIES { properties_props :: [Prop]
            | BDF_ENCODINGS { encodings_cols :: (Word16, Word16)
                            , encodings_rows :: (Word16, Word16)
                            , encodings_default_char :: Word16
-                           , encodings_glyph_indices :: [Word16] }
-           | Ignore
+                           , encodings_glyph_indices :: IntMap Word16 }
     deriving (Show, Eq)
 
 data Metrics = Metrics  { metrics_left_sided_bearings :: Word16
@@ -76,7 +145,18 @@ data Metrics = Metrics  { metrics_left_sided_bearings :: Word16
     deriving (Show, Eq)
 
 instance Binary PCF where
-  put = undefined
+  put (PCF tables) = undefined
+    -- putByteString "\1fcp"
+    -- putWord32le $ fromIntegral $ length tables
+    -- mapM_ (put . fst) tables
+    -- let tables_sorted = sortWith (tableMetaOffset . fst) tables
+    -- mapM_ put_table tables_sorted
+    -- where
+    --     pad = flip replicateM $ putWord8 0
+
+    --     put_table (TableMeta{..}, table) = do
+    --       pad (tableMetaOffset)
+    
   get = do
     magic <- getByteString 4
     assert (magic == "\1fcp") "Invalid magic number found in PCF header."
@@ -102,25 +182,22 @@ instance Binary PCF where
         pos <- bytesRead
         skip $ fromIntegral tableMetaOffset - fromIntegral pos
         pos <- bytesRead
-        assert (pos == fromIntegral tableMetaOffset)
-          "Skipping ahead is broken."
+        assert (pos == fromIntegral tableMetaOffset) "Skipping ahead is broken."
         _ <- getWord32le -- Redundant 'format' field.
         let getWord32 = if tableMetaByte then getWord32be else getWord32le
         let getWord16 = if tableMetaByte then getWord16be else getWord16le
         let get_metrics = Metrics <$> getWord16 <*> getWord16 <*> getWord16 <*> getWord16 <*> getWord16 <*> getWord16
         let get_metrics_table ty = do
-            assert (isDefaultFormat tableMetaFormat || isCompressedMetricsFormat tableMetaFormat)
-              "Properties table only supports PCF_DEAULT_FORMAT and PCF_COMPRESSED_METRICS."
-            metrics <- if isCompressedMetricsFormat tableMetaFormat then do
-              metrics_count <- getWord16
-              -- fail $ "COMPRESSED: " ++ show metrics_count ++ " " ++ show tableMetaFormat
-              let getWord = fmap fromIntegral $ getWord8
-              replicateM (fromIntegral metrics_count) $
-                Metrics <$> getWord <*> getWord <*> getWord <*> getWord <*> getWord <*> pure 0
-            else do
-              metrics_count <- getWord32
-              replicateM (fromIntegral metrics_count) get_metrics
-            return $ METRICS ty (isCompressedMetricsFormat tableMetaFormat) metrics
+                assert (isDefaultFormat tableMetaFormat || isCompressedMetricsFormat tableMetaFormat) "Properties table only supports PCF_DEAULT_FORMAT and PCF_COMPRESSED_METRICS."
+                metrics <- fmap V.fromList $ if isCompressedMetricsFormat tableMetaFormat then do
+                  metrics_count <- getWord16
+                  let getWord = fmap (\x -> fromIntegral $ x - 0x80) getWord8
+                  replicateM (fromIntegral metrics_count) $
+                    Metrics <$> getWord <*> getWord <*> getWord <*> getWord <*> getWord <*> pure 0
+                else do
+                  metrics_count <- getWord32
+                  replicateM (fromIntegral metrics_count) get_metrics
+                return $ METRICS ty (isCompressedMetricsFormat tableMetaFormat) metrics
         let get_accelerators_table = 
               ACCELERATORS <$> get <*> get <*> get <*> get <*> get <*> get <*> get
                            <* getWord8 <*> getWord32 <*> getWord32 <*> getWord32 <*> get_metrics <*> get_metrics
@@ -144,22 +221,24 @@ instance Binary PCF where
           PCF_INK_METRICS -> get_metrics_table True
           PCF_BITMAPS -> do
             glyph_count <- getWord32
-            offsets <- replicateM (fromIntegral glyph_count) getWord32
+            offsets <- V.fromList <$> replicateM (fromIntegral glyph_count) getWord32
             sizes <- (,,,) <$> getWord32 <*> getWord32 <*> getWord32 <*> getWord32
             bitmap_data <- getByteString $ fromIntegral $ case (tableMetaGlyphPad, sizes) of
-                                                            (0, (w,_,_,_)) -> w
-                                                            (1, (_,x,_,_)) -> x
-                                                            (2, (_,_,y,_)) -> y
-                                                            (3, (_,_,_,z)) -> z
+                                                            (1, (w,_,_,_)) -> w
+                                                            (2, (_,x,_,_)) -> x
+                                                            (4, (_,_,y,_)) -> y
+                                                            (8, (_,_,_,z)) -> z
             return $ BITMAPS glyph_count offsets sizes (B.fromStrict bitmap_data)
           PCF_BDF_ENCODINGS -> do
-            first_col <- getWord16
-            last_col <- getWord16
-            first_row <- getWord16
-            last_row <- getWord16
+            cols <- (,) <$> getWord16 <*> getWord16
+            rows <- (,) <$> getWord16 <*> getWord16
             default_char <- getWord16
-            glyph_indices <- replicateM (fromIntegral $ (last_col - first_col + 1) * (last_row - first_row + 1)) getWord16
-            return $ BDF_ENCODINGS (first_col, last_col) (first_row, last_row) default_char glyph_indices
+            glyph_indices <-
+                flip mapM [fst rows..snd rows] $ \i ->
+                    flip mapM [fst cols..snd cols] $ \j -> do
+                        encoding_offset <- getWord16
+                        return (fromIntegral $ i * 256 + j, encoding_offset)
+            return $ BDF_ENCODINGS cols rows default_char (IntMap.fromList $ concat glyph_indices)
           PCF_SWIDTHS -> do
             glyph_count <- getWord32
             SWIDTHS <$> replicateM (fromIntegral glyph_count) getWord32
@@ -236,10 +315,10 @@ instance Binary TableMeta where
     fmt <- getWord32le
     size <- getWord32le
     offset <- getWord32le
-    return $ TableMeta table_type fmt (fromIntegral $ fmt .&. 3) (fromIntegral $ fmt `shiftR` 4 .&. 0x3) (testBit fmt 2) (testBit fmt 3) size offset
+    return $ TableMeta table_type fmt (shiftL 1 $ fromIntegral $ fmt .&. 3) (fromIntegral $ fmt `shiftR` 4 .&. 0x3) (testBit fmt 2) (testBit fmt 3) size offset
 
   put TableMeta{..} = do
-    assert (tableMetaGlyphPad == fromIntegral (tableMetaFormat .&. 3))
+    assert (tableMetaGlyphPad == (shiftL 1 $ fromIntegral $ tableMetaFormat .&. 3))
       "Inconsistent glyph padding in table metadata."
     assert (tableMetaScanUnit == fromIntegral (tableMetaFormat `shiftR` 4 .&. 0x3))
       "Inconsistent scan unit in table metadata."
