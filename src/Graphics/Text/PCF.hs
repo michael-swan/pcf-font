@@ -1,6 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE NamedFieldPuns #-}
 module Graphics.Text.PCF (PCF, PCFGlyph, loadPCF, decodePCF, getPCFGlyph, getGlyphStrings, getPropMap) where
 
 import Data.Binary
@@ -24,6 +23,7 @@ import qualified Data.Vector as V
 import Data.IntMap (IntMap)
 import qualified Data.IntMap as IntMap
 import Data.Tuple
+import Graphics.Text.PCF.Types
 
 assert :: Monad m => Bool -> String -> m ()
 assert True  = const $ return ()
@@ -68,103 +68,12 @@ getPCFGlyph PCF{..} c = do
         (_, BDF_ENCODINGS{..})      = pcf_bdf_encodings
         glyph_padding = fromIntegral $ tableMetaGlyphPad meta_bitmaps
 
-data PCF = PCF { pcf_properties       :: (TableMeta, Table)
-               , pcf_accelerators     :: (TableMeta, Table)
-               , pcf_metrics          :: (TableMeta, Table)
-               , pcf_bitmaps          :: (TableMeta, Table)
-               , pcf_ink_metrics      :: (TableMeta, Table)
-               , pcf_bdf_encodings    :: (TableMeta, Table)
-               , pcf_swidths          :: (TableMeta, Table)
-               , pcf_glyph_names      :: (TableMeta, Table)
-               , pcf_bdf_accelerators :: (TableMeta, Table)
-               }
-    deriving (Show)
-
-data PCFGlyph = PCFGlyph { glyph_char :: Char
-                         , glyph_width :: Int
-                         , glyph_height :: Int
-                         , glyph_padding :: Int
-                         , glyph_bitmap :: ByteString }
-    deriving (Eq)
-
-instance Show PCFGlyph where
-    show PCFGlyph{..} = "PCFGlyph {glyph_char = " ++ show glyph_char ++
-                        ", glyph_width = " ++ show glyph_width ++
-                        ", glyph_height = " ++ show glyph_height ++
-                        ", glyph_bitmap = " ++ show glyph_bitmap ++ "}\n" ++
-
-                        (BC.unpack $ mconcat $ map ((<> "\n") . showBits) rs)
-        where
-            
-            rs = rows glyph_bitmap
-            rows bs = case B.splitAt pitch bs of
-                    (r, "") -> [r]
-                    (r, t) -> r : rows t
-                    
-            pitch = fromIntegral $ case glyph_padding of
-                        1 -> (glyph_width + 7) `shiftR` 3
-                        2 -> (glyph_width + 15) `shiftR` 4 `shiftL` 1
-                        4 -> (glyph_width + 31) `shiftR` 5 `shiftL` 2
-                        8 -> (glyph_width + 63) `shiftR` 6 `shiftL` 3
-
-            showBits = B.concatMap (\w -> showBit w 7 <> showBit w 6 <> showBit w 5 <> showBit w 4 <> showBit w 3 <> showBit w 2 <> showBit w 1 <> showBit w 0)
-            showBit :: Word8 -> Int -> ByteString
-            showBit w i
-              | testBit w i = "X"
-              | otherwise   = " "
-
-data Prop = Prop { prop_name_offset :: Word32
-                 , prop_is_string :: Word8
-                 , prop_value :: Word32 }
-    deriving (Show, Eq)
-
-data Table = PROPERTIES { properties_props :: [Prop]
-                        , properties_strings :: ByteString }
-           | BITMAPS { bitmaps_glyph_count :: Word32
-                     , bitmaps_offsets :: Vector Word32
-                     , bitmaps_sizes :: (Word32, Word32, Word32, Word32)
-                     , bitmaps_data :: ByteString }
-           | METRICS { metrics_ink_type :: Bool
-                     , metrics_compressed :: Bool
-                     , metrics_metrics :: Vector Metrics }
-           | SWIDTHS { swidths_swidths :: [Word32] }
-           | ACCELERATORS { accel_no_overlap :: Bool
-                          , accel_constant_metrics :: Bool
-                          , accel_terminal_font :: Bool
-                          , accel_constant_width :: Bool
-                          , accel_ink_inside :: Bool
-                          , accel_ink_metrics :: Bool
-                          , accel_draw_direction :: Bool
-                          -- ^ False = left to right, True = right to left
-                          , accel_font_ascent :: Word32
-                          , accel_font_descent :: Word32
-                          , accel_max_overlap :: Word32
-                          , accel_min_bounds :: Metrics
-                          , accel_max_bounds :: Metrics
-                          , accel_ink_min_max_bounds :: Maybe (Metrics, Metrics)
-                          }
-           | GLYPH_NAMES { glyph_names_offsets :: [Word32]
-                         , glyph_names_string :: ByteString }
-           | BDF_ENCODINGS { encodings_cols :: (Word16, Word16)
-                           , encodings_rows :: (Word16, Word16)
-                           , encodings_default_char :: Word16
-                           , encodings_glyph_indices :: IntMap Word16 }
-    deriving (Show, Eq)
-
-data Metrics = Metrics  { metrics_left_sided_bearings :: Word16
-                        , metrics_right_sided_bearings :: Word16
-                        , metrics_character_width :: Word16
-                        , metrics_character_ascent :: Word16
-                        , metrics_character_descent :: Word16
-                        , metrics_character_attributes :: Word16 }
-    deriving (Show, Eq)
-
 getPCF :: Get PCF
 getPCF = do
     magic <- getByteString 4
     assert (magic == "\1fcp") "Invalid magic number found in PCF header."
     table_count <- getWord32le
-    table_metas <- replicateM (fromIntegral table_count) get
+    table_metas <- replicateM (fromIntegral table_count) getTableMeta
     -- Sort table meta data according to table offset in order to avoid backtracking when parsing table contents
     let table_metas_sorted = sortWith tableMetaOffset table_metas
         table_types = map tableMetaType table_metas_sorted
@@ -255,105 +164,7 @@ getPCF = do
           PCF_GLYPH_NAMES ->
             GLYPH_NAMES <$> (getWord32 >>= flip replicateM getWord32 . fromIntegral) <*> (getWord32 >>= fmap B.fromStrict . getByteString . fromIntegral)
         pos' <- bytesRead
-        -- assert (pos' - pos == fromIntegral tableMetaSize || table == Ignore) $ "Table size not reached: " ++ show (pos' - pos) ++ " /= " ++ show tableMetaSize
-        -- ^ Temporary check: table == Ignore
         return table
-
-data PCFMeta = PCFMeta [TableMeta]
-    deriving (Show)
-
-instance Binary PCFMeta where
-  get = do
-    magic <- getByteString 4
-    case magic == "\1fcp" of
-      True  -> return ()
-      False -> error "Invalid magic number found in PCF header."
-    table_count <- fromIntegral <$> getWord32le
-    PCFMeta <$> replicateM table_count get
-
-  put (PCFMeta table_meta) = do
-    putByteString "\1fcp"
-    putWord32le $ fromIntegral $ length table_meta
-    mapM_ put table_meta
-
-data TableMeta = TableMeta { tableMetaType :: PCFTableType
-                           -- ^ Table type
-                           , tableMetaFormat :: Word32
-                           -- ^ Whole format field for reconstructing
-                           , tableMetaGlyphPad :: Word8
-                           -- ^ Level of padding applied to glyph bitmaps
-                           , tableMetaScanUnit :: Word8
-                           -- ^ ?
-                           , tableMetaByte :: Bool
-                           -- ^ Byte-wise endianess
-                           , tableMetaBit :: Bool
-                           -- ^ Bit-wise endianess
-                           , tableMetaSize :: Word32
-                           -- ^ Number of bytes used by the table
-                           , tableMetaOffset :: Word32
-                           -- ^ Byte offset to table from beginning of file
-                           }
-    deriving (Show)
-
-instance Binary TableMeta where
-  get = do
-    table_type <- get
-    fmt <- getWord32le
-    size <- getWord32le
-    offset <- getWord32le
-    return $ TableMeta table_type fmt (shiftL 1 $ fromIntegral $ fmt .&. 3) (fromIntegral $ fmt `shiftR` 4 .&. 0x3) (testBit fmt 2) (testBit fmt 3) size offset
-
-  put TableMeta{..} = do
-    assert (tableMetaGlyphPad == (shiftL 1 $ fromIntegral $ tableMetaFormat .&. 3))
-      "Inconsistent glyph padding in table metadata."
-    assert (tableMetaScanUnit == fromIntegral (tableMetaFormat `shiftR` 4 .&. 0x3))
-      "Inconsistent scan unit in table metadata."
-    assert (tableMetaByte == testBit tableMetaFormat 2)
-      "Inconsistent byte-wise endianness in table metadata."
-    assert (tableMetaBit == testBit tableMetaFormat 3)
-      "Inconsistent bit-wise endianness in table metadata."
-    put tableMetaType
-    putWord32le tableMetaFormat
-    putWord32le tableMetaSize
-    putWord32le tableMetaOffset
-
-data PCFTableType = PCF_PROPERTIES
-                  | PCF_ACCELERATORS
-                  | PCF_METRICS
-                  | PCF_BITMAPS
-                  | PCF_INK_METRICS
-                  | PCF_BDF_ENCODINGS
-                  | PCF_SWIDTHS
-                  | PCF_GLYPH_NAMES
-                  | PCF_BDF_ACCELERATORS
-    deriving (Show, Eq, Ord)
-
-instance Binary PCFTableType where
-  get = do
-    type_rep <- getWord32le
-    case type_rep of
-      0x001 -> return PCF_PROPERTIES
-      0x002 -> return PCF_ACCELERATORS
-      0x004 -> return PCF_METRICS
-      0x008 -> return PCF_BITMAPS
-      0x010 -> return PCF_INK_METRICS
-      0x020 -> return PCF_BDF_ENCODINGS
-      0x040 -> return PCF_SWIDTHS
-      0x080 -> return PCF_GLYPH_NAMES
-      0x100 -> return PCF_BDF_ACCELERATORS
-      _     -> fail "Invalid PCF table type encountered."
-
-  put type_val = putWord32le $
-      case type_val of
-        PCF_PROPERTIES       -> 0x001 
-        PCF_ACCELERATORS     -> 0x002 
-        PCF_METRICS          -> 0x004 
-        PCF_BITMAPS          -> 0x008 
-        PCF_INK_METRICS      -> 0x010 
-        PCF_BDF_ENCODINGS    -> 0x020 
-        PCF_SWIDTHS          -> 0x040 
-        PCF_GLYPH_NAMES      -> 0x080 
-        PCF_BDF_ACCELERATORS -> 0x100 
 
 loadPCF :: FilePath -> IO (Either String PCF)
 loadPCF filepath = decodePCF <$> B.readFile filepath
@@ -362,3 +173,24 @@ decodePCF :: ByteString -> Either String PCF
 decodePCF = either (Left . extract) (Right . extract) . runGetOrFail getPCF
     where
         extract (_,_,v) = v
+
+getPCFTableType = do
+  type_rep <- getWord32le
+  case type_rep of
+    0x001 -> return PCF_PROPERTIES
+    0x002 -> return PCF_ACCELERATORS
+    0x004 -> return PCF_METRICS
+    0x008 -> return PCF_BITMAPS
+    0x010 -> return PCF_INK_METRICS
+    0x020 -> return PCF_BDF_ENCODINGS
+    0x040 -> return PCF_SWIDTHS
+    0x080 -> return PCF_GLYPH_NAMES
+    0x100 -> return PCF_BDF_ACCELERATORS
+    _     -> fail "Invalid PCF table type encountered."
+
+getTableMeta = do
+  table_type <- getPCFTableType
+  fmt <- getWord32le
+  size <- getWord32le
+  offset <- getWord32le
+  return $ TableMeta table_type fmt (shiftL 1 $ fromIntegral $ fmt .&. 3) (fromIntegral $ fmt `shiftR` 4 .&. 0x3) (testBit fmt 2) (testBit fmt 3) size offset
