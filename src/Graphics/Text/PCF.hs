@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NamedFieldPuns #-}
-module Graphics.Text.PCF (PCF, PCFGlyph, loadPCF, decodePCF, getPCFGlyph, getGlyphString) where
+module Graphics.Text.PCF (PCF, PCFGlyph, loadPCF, decodePCF, getPCFGlyph, getGlyphStrings, getPropMap) where
 
 import Data.Binary
 import Data.Binary.Get
@@ -39,12 +39,23 @@ lookupTable (PCF ts) = flip M.lookup $ M.fromList $ map f ts
     where
         f entry@(TableMeta{..},_) = (tableMetaType, entry)
 
-getGlyphString :: PCF -> ByteString
-getGlyphString (PCF ts) = glyph_names_string
-    where
-        lookup = flip M.lookup $ M.fromList $ map (\(x, y) -> (tableMetaType x, y)) ts
-        Just (GLYPH_NAMES{..}) = lookup PCF_GLYPH_NAMES
+getGlyphStrings :: PCF -> Maybe [ByteString]
+getGlyphStrings pcf = do
+    (_, GLYPH_NAMES{..}) <- lookupTable pcf PCF_GLYPH_NAMES
+    return $ B.split 0 glyph_names_string
 
+getPropMap :: PCF -> Maybe [(ByteString, Either ByteString Int)]
+getPropMap pcf = do
+    (_, PROPERTIES{..})  <- lookupTable pcf PCF_PROPERTIES
+    return $ flip map properties_props $ \Prop{..} ->
+        (B.takeWhile (/= 0) $ B.drop (fromIntegral prop_name_offset) properties_strings,
+         if prop_is_string /= 0 then
+             Left $ B.takeWhile (/= 0) $ B.drop (fromIntegral prop_value) properties_strings
+         else
+             Right $ fromIntegral prop_value)
+    -- where
+    --     lookup = flip M.lookup $ M.fromList $ map (\(x, y) -> (tableMetaType x, y)) ts
+    --     Just (GLYPH_NAMES{..}) = lookup PCF_GLYPH_NAMES
 
 -- getPCFGlyph :: PCF -> Char -> (Char, Int, Int, Int, Int, Metrics, Bool, Word8, Int)
 -- (c, pitch, rows, bytes, offset, a, (tableMetaFormat x .&. 0xFFFFFF00) == 0x00000100, tableMetaGlyphPad, w)
@@ -88,7 +99,7 @@ instance Show PCFGlyph where
         where
             
             rs = rows glyph_bitmap
-            rows bs = case B.splitAt 4 bs of
+            rows bs = case B.splitAt pitch bs of
                     (r, "") -> [r]
                     (r, t) -> r : rows t
                     
