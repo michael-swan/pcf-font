@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-module Graphics.Text.PCF (PCF, PCFGlyph, loadPCF, decodePCF, getPCFGlyph, getGlyphStrings, getPropMap) where
+module Graphics.Text.PCF (PCF, PCFGlyph(..), loadPCF, decodePCF, getPCFGlyph, getPCFProps) where
 
 import Data.Binary
 import Data.Binary.Get
@@ -33,11 +33,9 @@ allUnique :: Eq a => [a] -> Bool
 allUnique [] = True
 allUnique (x:xs) = x `notElem` xs && allUnique xs
 
-getGlyphStrings :: PCF -> [ByteString]
-getGlyphStrings PCF{..} = B.split 0 $ glyph_names_string $ snd pcf_glyph_names
-
-getPropMap :: PCF -> [(ByteString, Either ByteString Int)]
-getPropMap PCF{..} = flip map properties_props $ \Prop{..} ->
+-- | List key-value pairs found in PCF properties table.
+getPCFProps :: PCF -> [(ByteString, Either ByteString Int)]
+getPCFProps PCF{..} = flip map properties_props $ \Prop{..} ->
         (getPropString prop_name_offset,
          if prop_is_string /= 0 then
              Left $ getPropString prop_value
@@ -47,6 +45,7 @@ getPropMap PCF{..} = flip map properties_props $ \Prop{..} ->
         (_, PROPERTIES{..}) = pcf_properties
         getPropString = B.takeWhile (/= 0) . flip B.drop properties_strings . fromIntegral
 
+-- | Extract a single glyph bitmap from a PCF font.
 getPCFGlyph :: PCF -> Char -> Maybe PCFGlyph
 getPCFGlyph PCF{..} c = do
         glyph_index <- fromIntegral <$> IntMap.lookup (ord c) encodings_glyph_indices
@@ -61,7 +60,7 @@ getPCFGlyph PCF{..} c = do
                     8 -> Just $ ((cols + 63) `shiftR` 6) `shiftL` 3
                     _ -> Nothing
         let bytes = fromIntegral $ rows * pitch
-        return $ PCFGlyph c cols rows glyph_padding (B.take bytes $ B.drop offset bitmaps_data)
+        return $ PCFGlyph c cols rows pitch (B.take bytes $ B.drop offset bitmaps_data)
     where
         (meta_bitmaps, BITMAPS{..}) = pcf_bitmaps
         (_, METRICS{..})            = pcf_metrics
@@ -166,9 +165,11 @@ getPCF = do
         pos' <- bytesRead
         return table
 
+-- | Load a PCF font file. File should not be compressed (e.g. ".pcf.gz" extension).
 loadPCF :: FilePath -> IO (Either String PCF)
 loadPCF filepath = decodePCF <$> B.readFile filepath
 
+-- | Decode a PCF font from an in-memory `ByteString`.
 decodePCF :: ByteString -> Either String PCF
 decodePCF = either (Left . extract) (Right . extract) . runGetOrFail getPCF
     where

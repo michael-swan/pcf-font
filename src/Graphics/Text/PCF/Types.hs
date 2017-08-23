@@ -10,6 +10,7 @@ import Data.IntMap (IntMap)
 import Data.ByteString.Lazy as B (concatMap)
 import Data.ByteString.Lazy.Char8 as B (ByteString, unpack, splitAt)
 
+-- | Container of tables extracted from a PCF font file.
 data PCF = PCF { pcf_properties       :: (TableMeta, Table)
                , pcf_accelerators     :: (TableMeta, Table)
                , pcf_metrics          :: (TableMeta, Table)
@@ -95,11 +96,18 @@ data PCFTableType = PCF_PROPERTIES
                   | PCF_BDF_ACCELERATORS
     deriving (Eq, Ord)
 
+-- | Container of a single glyph bitmap and its metadata.
 data PCFGlyph = PCFGlyph { glyph_char :: Char
+                         -- ^ Unicode character corresponding to glyph.
                          , glyph_width :: Int
+                         -- ^ Pixel width of glyph once rendered.
                          , glyph_height :: Int
-                         , glyph_padding :: Int
-                         , glyph_bitmap :: ByteString }
+                         -- ^ Pixel height of glyph once rendered.
+                         , glyph_pitch :: Int
+                         -- ^ Number of bytes in each bitmap row.
+                         , glyph_bitmap :: ByteString
+                         -- ^ `glyph_height` rows of `glyph_pitch` bytes containing the glyph's bitmap image starting from the left-most bit and ending at the `glyph_width` bit in each row.
+                         }
 
 instance Show PCFGlyph where
     show PCFGlyph{..} = "PCFGlyph {glyph_char = " ++ show glyph_char ++
@@ -111,16 +119,9 @@ instance Show PCFGlyph where
         where
             
             rs = rows glyph_bitmap
-            rows bs = case B.splitAt pitch bs of
+            rows bs = case B.splitAt (fromIntegral glyph_pitch) bs of
                     (r, "") -> [r]
                     (r, t) -> r : rows t
-                    
-            pitch = fromIntegral $ case glyph_padding of
-                        1 -> (glyph_width + 7) `shiftR` 3
-                        2 -> (glyph_width + 15) `shiftR` 4 `shiftL` 1
-                        4 -> (glyph_width + 31) `shiftR` 5 `shiftL` 2
-                        8 -> (glyph_width + 63) `shiftR` 6 `shiftL` 3
-                        _ -> 4
 
             showBits = B.concatMap (\w -> showBit w 7 <> showBit w 6 <> showBit w 5 <> showBit w 4 <> showBit w 3 <> showBit w 2 <> showBit w 1 <> showBit w 0)
             showBit :: Word8 -> Int -> ByteString
