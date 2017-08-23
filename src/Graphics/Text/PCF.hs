@@ -33,53 +33,51 @@ allUnique :: Eq a => [a] -> Bool
 allUnique [] = True
 allUnique (x:xs) = x `notElem` xs && allUnique xs
 
--- | Lookup a PCF table by its type.
-lookupTable :: PCF -> PCFTableType -> Maybe (TableMeta, Table)
-lookupTable (PCF ts) = flip M.lookup $ M.fromList $ map f ts
-    where
-        f entry@(TableMeta{..},_) = (tableMetaType, entry)
+getGlyphStrings :: PCF -> [ByteString]
+getGlyphStrings PCF{..} = B.split 0 $ glyph_names_string $ snd pcf_glyph_names
 
-getGlyphStrings :: PCF -> Maybe [ByteString]
-getGlyphStrings pcf = do
-    (_, GLYPH_NAMES{..}) <- lookupTable pcf PCF_GLYPH_NAMES
-    return $ B.split 0 glyph_names_string
-
-getPropMap :: PCF -> Maybe [(ByteString, Either ByteString Int)]
-getPropMap pcf = do
-    (_, PROPERTIES{..})  <- lookupTable pcf PCF_PROPERTIES
-    return $ flip map properties_props $ \Prop{..} ->
-        (B.takeWhile (/= 0) $ B.drop (fromIntegral prop_name_offset) properties_strings,
+getPropMap :: PCF -> [(ByteString, Either ByteString Int)]
+getPropMap PCF{..} = flip map properties_props $ \Prop{..} ->
+        (getPropString prop_name_offset,
          if prop_is_string /= 0 then
-             Left $ B.takeWhile (/= 0) $ B.drop (fromIntegral prop_value) properties_strings
+             Left $ getPropString prop_value
          else
              Right $ fromIntegral prop_value)
-    -- where
-    --     lookup = flip M.lookup $ M.fromList $ map (\(x, y) -> (tableMetaType x, y)) ts
-    --     Just (GLYPH_NAMES{..}) = lookup PCF_GLYPH_NAMES
-
--- getPCFGlyph :: PCF -> Char -> (Char, Int, Int, Int, Int, Metrics, Bool, Word8, Int)
--- (c, pitch, rows, bytes, offset, a, (tableMetaFormat x .&. 0xFFFFFF00) == 0x00000100, tableMetaGlyphPad, w)
-getPCFGlyph :: PCF -> Char -> Maybe PCFGlyph
-getPCFGlyph pcf c = do
-        (meta_bitmap, BITMAPS{..})  <- lookupTable pcf PCF_BITMAPS
-        (meta_metrics, METRICS{..}) <- lookupTable pcf PCF_METRICS
-        (_, BDF_ENCODINGS{..})      <- lookupTable pcf PCF_BDF_ENCODINGS
-        glyph_index <- fromIntegral <$> ord c `IntMap.lookup` encodings_glyph_indices
-        Metrics{..} <- metrics_metrics V.!? glyph_index
-        let bytes = fromIntegral $ rows * pitch
-            rows = fromIntegral $ metrics_character_ascent + metrics_character_descent
-            w = fromIntegral $ metrics_right_sided_bearings - metrics_left_sided_bearings
-            pitch = case tableMetaGlyphPad meta_bitmap of
-                    1 -> (w + 7) `shiftR` 3
-                    2 -> ((w + 15) `shiftR` 4) `shiftL` 1
-                    4 -> ((w + 31) `shiftR` 5) `shiftL` 2
-                    8 -> ((w + 63) `shiftR` 6) `shiftL` 3
-        offset <- fmap fromIntegral $ bitmaps_offsets V.!? glyph_index
-        return $ PCFGlyph c w rows (fromIntegral $ tableMetaGlyphPad meta_bitmap) (B.take bytes $ B.drop offset $ bitmaps_data)
     where
+        (_, PROPERTIES{..}) = pcf_properties
+        getPropString = B.takeWhile (/= 0) . flip B.drop properties_strings . fromIntegral
 
+getPCFGlyph :: PCF -> Char -> Maybe PCFGlyph
+getPCFGlyph PCF{..} c = do
+        glyph_index <- fromIntegral <$> IntMap.lookup (ord c) encodings_glyph_indices
+        offset      <- fromIntegral <$> (bitmaps_offsets V.!? glyph_index)
+        Metrics{..} <- metrics_metrics V.!? glyph_index
+        let cols = fromIntegral $ metrics_right_sided_bearings - metrics_left_sided_bearings
+            rows = fromIntegral $ metrics_character_ascent + metrics_character_descent
+        pitch <- case glyph_padding of
+                    1 -> Just $ (cols + 7) `shiftR` 3
+                    2 -> Just $ ((cols + 15) `shiftR` 4) `shiftL` 1
+                    4 -> Just $ ((cols + 31) `shiftR` 5) `shiftL` 2
+                    8 -> Just $ ((cols + 63) `shiftR` 6) `shiftL` 3
+                    _ -> Nothing
+        let bytes = fromIntegral $ rows * pitch
+        return $ PCFGlyph c cols rows glyph_padding (B.take bytes $ B.drop offset bitmaps_data)
+    where
+        (meta_bitmaps, BITMAPS{..}) = pcf_bitmaps
+        (_, METRICS{..})            = pcf_metrics
+        (_, BDF_ENCODINGS{..})      = pcf_bdf_encodings
+        glyph_padding = fromIntegral $ tableMetaGlyphPad meta_bitmaps
 
-data PCF = PCF [(TableMeta, Table)]
+data PCF = PCF { pcf_properties       :: (TableMeta, Table)
+               , pcf_accelerators     :: (TableMeta, Table)
+               , pcf_metrics          :: (TableMeta, Table)
+               , pcf_bitmaps          :: (TableMeta, Table)
+               , pcf_ink_metrics      :: (TableMeta, Table)
+               , pcf_bdf_encodings    :: (TableMeta, Table)
+               , pcf_swidths          :: (TableMeta, Table)
+               , pcf_glyph_names      :: (TableMeta, Table)
+               , pcf_bdf_accelerators :: (TableMeta, Table)
+               }
     deriving (Show)
 
 data PCFGlyph = PCFGlyph { glyph_char :: Char
@@ -156,7 +154,7 @@ data Metrics = Metrics  { metrics_left_sided_bearings :: Word16
     deriving (Show, Eq)
 
 instance Binary PCF where
-  put (PCF tables) = undefined
+  put PCF{..} = undefined
     -- putByteString "\1fcp"
     -- putWord32le $ fromIntegral $ length tables
     -- mapM_ (put . fst) tables
@@ -179,9 +177,18 @@ instance Binary PCF where
     assert (allUnique table_types) "Multiple PCF tables of the same type is not supported."
     tables <- mapM get_table table_metas_sorted
     -- Preserve original order to allow (put =<< get) to produce the original PCF file
-    let table_map = M.fromList $ zip table_types tables
-        tables' = map (flip M.lookup table_map . tableMetaType) table_metas
-    return $ PCF $ zip table_metas tables
+    let tableMap = flip M.lookup $ M.fromList $ zip table_types $ zip table_metas tables
+        -- tables' = map (flip M.lookup table_map . tableMetaType) table_metas
+        pcf = PCF <$> tableMap PCF_PROPERTIES
+                  <*> tableMap PCF_ACCELERATORS
+                  <*> tableMap PCF_METRICS
+                  <*> tableMap PCF_BITMAPS
+                  <*> tableMap PCF_INK_METRICS
+                  <*> tableMap PCF_BDF_ENCODINGS
+                  <*> tableMap PCF_SWIDTHS
+                  <*> tableMap PCF_GLYPH_NAMES
+                  <*> tableMap PCF_BDF_ACCELERATORS
+    maybe (fail "Incomplete PCF given. One or more tables are missing.") return pcf
     where
       isDefaultFormat, isInkBoundsFormat, isAccelWithInkBoundsFormat, isCompressedMetricsFormat :: Word32 -> Bool
       isDefaultFormat = (== 0x00000000) . (.&. 0xFFFFFF00)
