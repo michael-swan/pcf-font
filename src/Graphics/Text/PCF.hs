@@ -93,7 +93,7 @@ instance Show PCFGlyph where
                         ", glyph_height = " ++ show glyph_height ++
                         ", glyph_bitmap = " ++ show glyph_bitmap ++ "}\n" ++
 
-                        (BC.unpack $ mconcat $ map ((<> "\n") . bitStrEncode) rs)
+                        (BC.unpack $ mconcat $ map ((<> "\n") . showBits) rs)
         where
             
             rs = rows glyph_bitmap
@@ -106,6 +106,12 @@ instance Show PCFGlyph where
                         2 -> (glyph_width + 15) `shiftR` 4 `shiftL` 1
                         4 -> (glyph_width + 31) `shiftR` 5 `shiftL` 2
                         8 -> (glyph_width + 63) `shiftR` 6 `shiftL` 3
+
+            showBits = B.concatMap (\w -> showBit w 7 <> showBit w 6 <> showBit w 5 <> showBit w 4 <> showBit w 3 <> showBit w 2 <> showBit w 1 <> showBit w 0)
+            showBit :: Word8 -> Int -> ByteString
+            showBit w i
+              | testBit w i = "X"
+              | otherwise   = " "
 
 data Prop = Prop { prop_name_offset :: Word32
                  , prop_is_string :: Word8
@@ -153,20 +159,8 @@ data Metrics = Metrics  { metrics_left_sided_bearings :: Word16
                         , metrics_character_attributes :: Word16 }
     deriving (Show, Eq)
 
-instance Binary PCF where
-  put PCF{..} = undefined
-    -- putByteString "\1fcp"
-    -- putWord32le $ fromIntegral $ length tables
-    -- mapM_ (put . fst) tables
-    -- let tables_sorted = sortWith (tableMetaOffset . fst) tables
-    -- mapM_ put_table tables_sorted
-    -- where
-    --     pad = flip replicateM $ putWord8 0
-
-    --     put_table (TableMeta{..}, table) = do
-    --       pad (tableMetaOffset)
-    
-  get = do
+getPCF :: Get PCF
+getPCF = do
     magic <- getByteString 4
     assert (magic == "\1fcp") "Invalid magic number found in PCF header."
     table_count <- getWord32le
@@ -176,9 +170,7 @@ instance Binary PCF where
         table_types = map tableMetaType table_metas_sorted
     assert (allUnique table_types) "Multiple PCF tables of the same type is not supported."
     tables <- mapM get_table table_metas_sorted
-    -- Preserve original order to allow (put =<< get) to produce the original PCF file
     let tableMap = flip M.lookup $ M.fromList $ zip table_types $ zip table_metas tables
-        -- tables' = map (flip M.lookup table_map . tableMetaType) table_metas
         pcf = PCF <$> tableMap PCF_PROPERTIES
                   <*> tableMap PCF_ACCELERATORS
                   <*> tableMap PCF_METRICS
@@ -284,30 +276,6 @@ instance Binary PCFMeta where
     putWord32le $ fromIntegral $ length table_meta
     mapM_ put table_meta
 
--- data Metrics = Metrics  { metrics_left_sided_bearings  :: Word16
---                         , metrics_right_sided_bearings :: Word16
---                         , metrics_character_width      :: Word16
---                         , metrics_character_ascent     :: Word16
---                         , metrics_character_descent    :: Word16 }
---     deriving (Show)
-
--- data TableData = TblMetrics { metrics_format :: Word16
---                             , metrics_data :: [Metrics] }
---                | TblAccelerator { accel_format :: Word32
---                                 , accel_no_overlap :: Word8
---                                 , accel_constant_metrics :: Word8
---                                 , accel_terminal_font :: Word8
---                                 , accel_constant_width :: Word8
---                                 , accel_ink_inside :: Word8
---                                 , accel_ink_metrics :: Word8
---                                 , accel_draw_direction :: Word8
---                                 , accel_padding :: Word8
---                                 , accel_font_ascent :: Word32
---                                 , accel_font_descent :: Word32
---                                 , accel_max_overlap :: Word32
---                                 , metrics_data :: [Metrics] }
---     deriving (Show)
-
 data TableMeta = TableMeta { tableMetaType :: PCFTableType
                            -- ^ Table type
                            , tableMetaFormat :: Word32
@@ -387,80 +355,10 @@ instance Binary PCFTableType where
         PCF_GLYPH_NAMES      -> 0x080 
         PCF_BDF_ACCELERATORS -> 0x100 
 
--- data BitmapTbl = BitmapTbl { bitmap_format :: Word32
---                            , bitmap_glyph_count :: Word32
---                            , bitmap_offsets :: [Word32]
---                            , bitmap_sizes :: (Word32, Word32, Word32, Word32)
---                            , bitmap_data :: ByteString }
---     deriving (Show)
--- 
--- instance Binary BitmapTbl where
---   get = do
---     format <- getWord32le
---     let getWord = if testBit format 2 then getWord32be else getWord32le
---     glyph_count <- getWord
---     offsets <- replicateM (fromIntegral glyph_count) getWord
---     sizes <- (,,,) <$> getWord <*> getWord <*> getWord <*> getWord
---     bitmap_data <- getRemainingLazyByteString
---     return $ BitmapTbl format glyph_count offsets sizes bitmap_data
--- 
---   put (BitmapTbl format glyph_count offsets sizes bs) = do
---     putWord32le format
---     putWord32le glyph_count
---     mapM_ putWord32le offsets
---     put sizes
---     putByteString $ B.toStrict bs
-
 loadPCF :: FilePath -> IO (Either String PCF)
 loadPCF filepath = decodePCF <$> B.readFile filepath
 
 decodePCF :: ByteString -> Either String PCF
-decodePCF = either (Left . extract) (Right . extract) . decodeOrFail
+decodePCF = either (Left . extract) (Right . extract) . runGetOrFail getPCF
     where
         extract (_,_,v) = v
-  -- let extract (_,_,v) = v
-  --     extractE context = either (Left . (context ++) . (": " ++) . extract) (Right . extract)
-  --     getTableData (TableMeta _ _ _ size off) = B.take (fromIntegral size) (B.drop (fromIntegral off) bs)
-  --     -- myGet = (,) <$> getWord32le <*> getWord32be
-  -- PCFMeta table_meta <- extractE "Table Metadata" $ decodeOrFail bs
-  -- -- Left $ show $ map (runGet myGet . getTableData) $ (filter ((== PCF_BITMAPS) . tableMetaType) table_meta)
-  -- bitmap_tables <- mapM (extractE "Bitmap Table" . decodeOrFail . getTableData) (filter ((== PCF_BITMAPS) . tableMetaType) table_meta)
-  -- -- let f bs = case BS.splitAt 8 bs of
-  -- --              (x, "") -> x
-  -- --              (x, y) -> x <> "\n" <> f y
-  -- --     -- glyph = f $ Hex.encode $ B.toStrict $ B.take 44 $ B.drop (44 * 1) $ bitmap_data $ head $ bitmap_tables
-  -- return $ PCF table_meta bitmap_tables
-
--- printGlyph :: Int64 -> ByteString -> IO ()
--- printGlyph i bs = either putStrLn B.putStrLn $ do
---   let extract (_,_,v) = v
---       extractE context = either (Left . (context ++) . (": " ++) . extract) (Right . extract)
---       getTableData (TableMeta _ _ _ size off) = B.take (fromIntegral size) (B.drop (fromIntegral off) bs)
---       -- myGet = (,) <$> getWord32le <*> getWord32be
---   PCFMeta table_meta <- extractE "Table Metadata" $ decodeOrFail bs
---   -- Left $ show $ map (runGet myGet . getTableData) $ (filter ((== PCF_BITMAPS) . tableMetaType) table_meta)
---   bitmap_tables <- mapM (extractE "Bitmap Table" . decodeOrFail . getTableData) (filter ((== PCF_BITMAPS) . tableMetaType) table_meta)
---   let f bs = case B.splitAt (8*4) bs of
---                (x, "") -> x
---                (x, y) -> x <> "\n" <> f y
---       glyph = f $ bitStrEncode $ B.take 44 $ B.drop (44 * i) $ bitmap_data $ head $ bitmap_tables
---   return glyph
-
-  -- return $ PCF table_meta bitmap_tables
-bitStrEncode :: ByteString -> ByteString
-bitStrEncode = B.concatMap (\w -> showBit w 7 <> showBit w 6 <> showBit w 5 <> showBit w 4 <> showBit w 3 <> showBit w 2 <> showBit w 1 <> showBit w 0)
-    where
-        showBit :: Word8 -> Int -> ByteString
-        showBit w i
-          | testBit w i = "X"
-          | otherwise   = " "
-  -- case  of
-  --   Left (_, _, err) -> Left err
-  --   Right (_, _, PCFMeta table_meta) -> do
-  --     
-  --         bitmap_bs = getTableData PCF_BITMAPS
-  --         encoding_bs = getTableData PCF_BDF_ENCODINGS
-  --     case (,) <$> decodeOrFail bitmap_bs <*> decodeOrFail encoding_bs of
-  --       Left (_, _, err) -> Left err
-  --       Right ((_, _, BitmapTbl), (_, _, ..)) ->
-  --         
