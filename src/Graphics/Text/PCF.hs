@@ -1,6 +1,32 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-module Graphics.Text.PCF (PCF, PCFGlyph(..), loadPCF, decodePCF, getPCFGlyph, getPCFProps) where
+{-# LANGUAGE TupleSections #-}
+
+-- | Rendering bitmap text with __pcf-font__ is easy. Consider a program for rendering text into a PNG:
+--
+-- > import Graphics.Text.PCF
+-- > import Code.Picture.Png
+-- > import Code.Picture.Types
+-- >
+-- > main :: IO ()
+-- > main = do
+-- >     pcf <- loadPCF "font.pcf"
+-- >     ...
+module Graphics.Text.PCF (
+        -- * Decoding
+        loadPCF,
+        decodePCF,
+        -- * Rendering
+        renderPCFText,
+        getPCFGlyph,
+        getPCFGlyphPixel,
+        foldPCFGlyphPixels,
+        -- * Metadata
+        getPCFProps,
+        -- * Types
+        PCF,
+        PCFGlyph(..)
+    ) where
 
 import Data.Binary
 import Data.Binary.Get
@@ -12,7 +38,7 @@ import qualified Data.Map.Strict as M
 import Data.Monoid
 import Control.Monad
 import Data.ByteString.Lazy (ByteString)
-import Data.Vector (Vector, (!))
+import Data.Vector ((!?))
 import GHC.Int
 import GHC.Exts
 import Data.Char
@@ -20,6 +46,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy.Char8 as BC
 import qualified Data.ByteString.Lazy as B
 import qualified Data.Vector as V
+import qualified Data.Vector.Storable as VS
 import Data.IntMap (IntMap)
 import qualified Data.IntMap as IntMap
 import Data.Tuple
@@ -49,8 +76,8 @@ getPCFProps PCF{..} = flip map properties_props $ \Prop{..} ->
 getPCFGlyph :: PCF -> Char -> Maybe PCFGlyph
 getPCFGlyph PCF{..} c = do
         glyph_index <- fromIntegral <$> IntMap.lookup (ord c) encodings_glyph_indices
-        offset      <- fromIntegral <$> (bitmaps_offsets V.!? glyph_index)
-        Metrics{..} <- metrics_metrics V.!? glyph_index
+        offset      <- fromIntegral <$> (bitmaps_offsets !? glyph_index)
+        Metrics{..} <- metrics_metrics !? glyph_index
         let cols = fromIntegral $ metrics_right_sided_bearings - metrics_left_sided_bearings
             rows = fromIntegral $ metrics_character_ascent + metrics_character_descent
         pitch <- case glyph_padding of
@@ -195,3 +222,56 @@ getTableMeta = do
   size <- getWord32le
   offset <- getWord32le
   return $ TableMeta table_type fmt (shiftL 1 $ fromIntegral $ fmt .&. 3) (fromIntegral $ fmt `shiftR` 4 .&. 0x3) (testBit fmt 2) (testBit fmt 3) size offset
+
+-- | Calculate the color of a pixel in a glyph given its (x,y) coordinates.
+getPCFGlyphPixel :: PCFGlyph
+                 -> Int
+                 -- ^ X
+                 -> Int
+                 -- ^ Y
+                 -> Bool
+                 -- ^ `True` if pixel at (x,y) is opaque; `False` if pixel at (x,y) is transparent or (x,y) is out of the glyph's bounds
+getPCFGlyphPixel g@PCFGlyph{..} x y = x < glyph_width && y < glyph_height && x >= 0 && y >= 0 && getPCFGlyphPixelUnsafe g x y
+
+getPCFGlyphPixelUnsafe :: PCFGlyph -> Int -> Int -> Bool
+getPCFGlyphPixelUnsafe PCFGlyph{..} x y = testBit (B.head $ B.drop off glyph_bitmap) (7 - x `mod` 8)
+    where
+        off = fromIntegral $ y * glyph_pitch + x `div` 8
+        
+
+-- | Scan over every pixel in a glyph, constructing some value in the process.
+foldPCFGlyphPixels :: PCFGlyph
+                   -> (Int -> Int -> Bool -> a -> a)
+                   -- ^ Function that takes x, y, pixel value at (x,y), and an accumulator, returning a modified accumulator
+                   -> a
+                   -- ^ Initial accumulator
+                   -> a
+foldPCFGlyphPixels g@PCFGlyph{..} f =
+    fold [0..glyph_width-1] $ \x ->
+        fold [0..glyph_height-1] $ \y ->
+            f x y (getPCFGlyphPixelUnsafe g x y)
+    where
+        fold bs f a = foldl' (flip f) a bs
+
+-- | Generate a vector of black and white pixels from a PCF font and a string.
+renderPCFText :: PCF
+              -- ^ Font to render with
+              -> String
+              -- ^ Text to render
+              -> Maybe (Int, Int, VS.Vector Word8)
+              -- ^ `Just` width, height, and rendering; `Nothing` if an unrenderable character is encountered
+renderPCFText pcf@PCF{..} text = do
+    gs <- mapM (getPCFGlyph pcf) text
+    let (w, h) = if accel_constant_width then
+                    (length text * cols_per_glyph, rows_per_glyph)
+                 else
+                    (foldl' (\n -> (n +) . glyph_width) 0 gs, foldl' (\n -> max n . glyph_width) 0 gs)
+        (_, updates) = foldl' (\(off,us) g ->
+                                    (off + glyph_width g, foldPCFGlyphPixels g (\x y -> (:) . (off + x + y * w,) . bool 0xFF 0) [] : us))
+                               (0, []) gs
+    return (w, h, VS.replicate (w * h) 0xFF VS.// concat updates)
+    where
+        (_, ACCELERATORS{..}) = pcf_bdf_accelerators
+        Metrics{..} = accel_min_bounds
+        cols_per_glyph = fromIntegral $ metrics_right_sided_bearings - metrics_left_sided_bearings
+        rows_per_glyph = fromIntegral $ metrics_character_ascent + metrics_character_descent

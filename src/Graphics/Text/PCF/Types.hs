@@ -98,15 +98,15 @@ data PCFTableType = PCF_PROPERTIES
 
 -- | Container of a single glyph bitmap and its metadata.
 data PCFGlyph = PCFGlyph { glyph_char :: Char
-                         -- ^ Unicode character corresponding to glyph.
+                         -- ^ Unicode character corresponding to glyph
                          , glyph_width :: Int
-                         -- ^ Pixel width of glyph once rendered.
+                         -- ^ Pixel width of glyph once rendered
                          , glyph_height :: Int
-                         -- ^ Pixel height of glyph once rendered.
+                         -- ^ Pixel height of glyph once rendered
                          , glyph_pitch :: Int
-                         -- ^ Number of bytes in each bitmap row.
+                         -- ^ Number of bytes in each bitmap row
                          , glyph_bitmap :: ByteString
-                         -- ^ `glyph_height` rows of `glyph_pitch` bytes containing the glyph's bitmap image starting from the left-most bit and ending at the `glyph_width` bit in each row.
+                         -- ^ `glyph_height` rows of `glyph_pitch` bytes containing the glyph's bitmap image starting from the left-most bit and ending at the `glyph_width` bit in each row
                          }
 
 instance Show PCFGlyph where
