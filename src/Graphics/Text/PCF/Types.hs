@@ -4,6 +4,7 @@ module Graphics.Text.PCF.Types (PCF(..), PCFGlyph(..), Prop(..), Table(..), Metr
 
 import Data.Binary
 import Data.Bits
+import Data.Int
 import Data.Monoid
 import Data.Vector (Vector)
 import Data.IntMap (IntMap)
@@ -12,14 +13,13 @@ import Data.ByteString.Lazy.Char8 as B (ByteString, unpack, splitAt)
 
 -- | Container of tables extracted from a PCF font file.
 data PCF = PCF { pcf_properties       :: (TableMeta, Table)
-               , pcf_accelerators     :: (TableMeta, Table)
                , pcf_metrics          :: (TableMeta, Table)
                , pcf_bitmaps          :: (TableMeta, Table)
-               , pcf_ink_metrics      :: (TableMeta, Table)
                , pcf_bdf_encodings    :: (TableMeta, Table)
                , pcf_swidths          :: (TableMeta, Table)
-               , pcf_glyph_names      :: (TableMeta, Table)
-               , pcf_bdf_accelerators :: (TableMeta, Table)
+               , pcf_accelerators     :: (TableMeta, Table)
+               , pcf_glyph_names      :: Maybe (TableMeta, Table)
+               , pcf_ink_metrics      :: Maybe (TableMeta, Table)
                }
 
 data Table = PROPERTIES { properties_props :: [Prop]
@@ -59,12 +59,12 @@ data Prop = Prop { prop_name_offset :: Word32
                  , prop_value :: Word32 }
     deriving (Eq)
 
-data Metrics = Metrics  { metrics_left_sided_bearings :: Word16
-                        , metrics_right_sided_bearings :: Word16
-                        , metrics_character_width :: Word16
-                        , metrics_character_ascent :: Word16
-                        , metrics_character_descent :: Word16
-                        , metrics_character_attributes :: Word16 }
+data Metrics = Metrics  { metrics_left_sided_bearings :: Int16
+                        , metrics_right_sided_bearings :: Int16
+                        , metrics_character_width :: Int16
+                        , metrics_character_ascent :: Int16
+                        , metrics_character_descent :: Int16
+                        , metrics_character_attributes :: Int16 }
     deriving (Eq)
 
 data TableMeta = TableMeta { tableMetaType :: PCFTableType
@@ -94,10 +94,11 @@ data PCFTableType = PCF_PROPERTIES
                   | PCF_SWIDTHS
                   | PCF_GLYPH_NAMES
                   | PCF_BDF_ACCELERATORS
-    deriving (Eq, Ord)
+    deriving (Eq, Ord, Show)
 
 -- | Container of a single glyph bitmap and its metadata.
-data PCFGlyph = PCFGlyph { glyph_char :: Char
+data PCFGlyph = PCFGlyph { glyph_metrics :: Metrics
+                         , glyph_char :: Char
                          -- ^ Unicode character corresponding to glyph
                          , glyph_width :: Int
                          -- ^ Pixel width of glyph once rendered
@@ -128,4 +129,3 @@ instance Show PCFGlyph where
             showBit w i
               | testBit w i = "X"
               | otherwise   = " "
-
