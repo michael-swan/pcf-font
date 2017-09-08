@@ -34,7 +34,8 @@ module Graphics.Text.PCF (
         getGlyphStrings,
         -- * Types
         PCF,
-        PCFGlyph(..)
+        PCFGlyph(..),
+        Metrics(..)
     ) where
 
 import Data.Binary

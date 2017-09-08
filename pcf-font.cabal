@@ -1,7 +1,7 @@
 name:                pcf-font
 version:             0.1.0.0
 synopsis:            PCF font parsing and rendering library.
--- description:
+description:         pcf-font is a library for parsing and rendering X11 PCF fonts.
 homepage:            https://github.com/michael-swan/pcf-font
 license:             BSD3
 license-file:        LICENSE
