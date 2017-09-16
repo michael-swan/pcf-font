@@ -2,7 +2,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
 
--- | Rendering bitmap text with __pcf-font__ is easy. Consider a program for rendering text into a PNG:
+-- | Rendering bitmap text with __pcf-font__ is easy. For instance, a program that renders text into a PNG is trivial:
 --
 -- > import Codec.Picture.Png
 -- > import Codec.Picture.Types
@@ -16,8 +16,24 @@
 -- >     [input_file, output_file, text] <- getArgs
 -- >     pcf <- either fail return =<< loadPCF input_file
 -- >     case renderPCFText pcf text of
--- >         Just (w, h, image_data) ->
--- >             writePng output_file (Image w h image_data :: Image Pixel8)
+-- >         Just (PCFText _ w h img) ->
+-- >             writePng output_file (Image w h img :: Image Pixel8)
+-- >         Nothing ->
+-- >             putStrLn "ERROR: Unable to render input text."
+--
+-- Rendering some text as an ASCII bitmap is also convenient:
+--
+-- > import Graphics.Text.PCF
+-- > import System.Environment
+-- >
+-- > -- | USAGE: program <font.pcf> <text>
+-- > main :: IO ()
+-- > main = do
+-- >     [font_file, text] <- getArgs
+-- >     pcf <- either fail return =<< loadPCF font_file
+-- >     case renderPCFText pcf text of
+-- >         Just pcf_text ->
+-- >             putStrLn $ pcf_text_ascii pcf_text
 -- >         Nothing ->
 -- >             putStrLn "ERROR: Unable to render input text."
 module Graphics.Text.PCF (
@@ -29,12 +45,16 @@ module Graphics.Text.PCF (
         getPCFGlyph,
         getPCFGlyphPixel,
         foldPCFGlyphPixels,
+        -- * ASCII Rendering
+        pcf_text_ascii,
+        glyph_ascii,
+        glyph_ascii_lines,
         -- * Metadata
         getPCFProps,
-        getGlyphStrings,
         -- * Types
         PCF,
         PCFGlyph(..),
+        PCFText(..),
         Metrics(..)
     ) where
 
@@ -278,7 +298,7 @@ renderPCFText :: PCF
               -- ^ Font to render with
               -> String
               -- ^ Text to render
-              -> Maybe (Int, Int, VS.Vector Word8)
+              -> Maybe PCFText
               -- ^ `Just` width, height, and rendering; `Nothing` if an unrenderable character is encountered
 renderPCFText pcf@PCF{..} text = do
     glyphs <- mapM (getPCFGlyph pcf) text
@@ -292,7 +312,4 @@ renderPCFText pcf@PCF{..} text = do
     if w * h > 64 * 1024 * 1024 then
         Nothing
     else
-        return (w, h, VS.replicate (w * h) 0xFF VS.// (map (,0) $ concat $ updates 0 glyphs))
-
-getGlyphStrings :: PCF -> [ByteString]
-getGlyphStrings = maybe [] (B.split 0 . glyph_names_string . snd) . pcf_glyph_names
+        return (PCFText glyphs w h $ VS.replicate (w * h) 0xFF VS.// (map (,0) $ concat $ updates 0 glyphs))

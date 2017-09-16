@@ -1,15 +1,32 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-module Graphics.Text.PCF.Types (PCF(..), PCFGlyph(..), Prop(..), Table(..), Metrics(..), TableMeta(..), PCFTableType(..)) where
+
+module Graphics.Text.PCF.Types (
+        PCF(..),
+        PCFGlyph(..),
+        Prop(..),
+        Table(..),
+        Metrics(..),
+        TableMeta(..),
+        PCFTableType(..),
+        PCFText(..),
+        glyph_ascii,
+        glyph_ascii_lines,
+        pcf_text_string,
+        pcf_text_ascii
+    ) where
 
 import Data.Binary
 import Data.Bits
 import Data.Int
 import Data.Monoid
+import Data.List
 import Data.Vector (Vector)
 import Data.IntMap (IntMap)
-import Data.ByteString.Lazy as B (concatMap)
-import Data.ByteString.Lazy.Char8 as B (ByteString, unpack, splitAt)
+import Data.ByteString.Lazy.Char8 (ByteString)
+import qualified Data.ByteString.Lazy as B (concatMap, take)
+import qualified Data.ByteString.Lazy.Char8 as B (unpack, splitAt, intercalate, concat)
+import qualified Data.Vector.Storable as VS
 
 -- | Container of tables extracted from a PCF font file.
 data PCF = PCF { pcf_properties       :: (TableMeta, Table)
@@ -59,13 +76,14 @@ data Prop = Prop { prop_name_offset :: Word32
                  , prop_value :: Word32 }
     deriving (Eq)
 
+-- | Container of glyph dimension and position metrics.
 data Metrics = Metrics  { metrics_left_sided_bearings :: Int16
                         , metrics_right_sided_bearings :: Int16
                         , metrics_character_width :: Int16
                         , metrics_character_ascent :: Int16
                         , metrics_character_descent :: Int16
                         , metrics_character_attributes :: Int16 }
-    deriving (Eq)
+    deriving (Eq, Show)
 
 data TableMeta = TableMeta { tableMetaType :: PCFTableType
                            -- ^ Table type
@@ -111,21 +129,51 @@ data PCFGlyph = PCFGlyph { glyph_metrics :: Metrics
                          }
 
 instance Show PCFGlyph where
-    show PCFGlyph{..} = "PCFGlyph {glyph_char = " ++ show glyph_char ++
-                        ", glyph_width = " ++ show glyph_width ++
-                        ", glyph_height = " ++ show glyph_height ++
-                        ", glyph_bitmap = " ++ show glyph_bitmap ++ "}\n" ++
+    show g@PCFGlyph{..} = "PCFGlyph {glyph_metrics = " ++ show glyph_metrics ++
+                          ", glyph_char = " ++ show glyph_char ++
+                          ", glyph_width = " ++ show glyph_width ++
+                          ", glyph_height = " ++ show glyph_height ++
+                          ", glyph_pitch = " ++ show glyph_pitch ++
+                          ", glyph_bitmap = " ++ show glyph_bitmap ++ "}\n" ++
+                          glyph_ascii g
 
-                        (unpack $ mconcat $ map ((<> "\n") . showBits) rs)
-        where
-            
-            rs = rows glyph_bitmap
-            rows bs = case B.splitAt (fromIntegral glyph_pitch) bs of
-                    (r, "") -> [r]
-                    (r, t) -> r : rows t
+-- | Render glyph bitmap as a string where 'X' represents opaque pixels and whitespace represents blank pixels.
+glyph_ascii :: PCFGlyph -> String
+glyph_ascii = B.unpack . mconcat . map (<> "\n") . glyph_ascii_lines_bs
 
-            showBits = B.concatMap (\w -> showBit w 7 <> showBit w 6 <> showBit w 5 <> showBit w 4 <> showBit w 3 <> showBit w 2 <> showBit w 1 <> showBit w 0)
-            showBit :: Word8 -> Int -> ByteString
-            showBit w i
-              | testBit w i = "X"
-              | otherwise   = " "
+-- | Render glyph bitmap as a list of strings representing lines where 'X' represents opaque pixels and whitespace represents blank pixels.
+glyph_ascii_lines :: PCFGlyph -> [String]
+glyph_ascii_lines = map B.unpack . glyph_ascii_lines_bs
+
+glyph_ascii_lines_bs :: PCFGlyph -> [ByteString]
+glyph_ascii_lines_bs PCFGlyph{..} = map (B.take (fromIntegral glyph_width) . showBits) rs
+    where
+        rs = rows glyph_bitmap
+        rows bs = case B.splitAt (fromIntegral glyph_pitch) bs of
+                (r, "") -> [r]
+                (r, t) -> r : rows t
+
+        showBits = B.concatMap $ mconcat $ map showBit [7,6..0]
+        showBit :: Int -> Word8 -> ByteString
+        showBit i w
+          | testBit w i = "X"
+          | otherwise   = " "
+
+-- | Representation of string and its corresponding bitmap content. Metadata regarding source font is not included.
+data PCFText = PCFText { pcf_text_glyphs :: [PCFGlyph]
+                       -- ^ Metadata of each glyph rendered to the image bitmap
+                       , pcf_text_width :: Int
+                       -- ^ Width of the rendered bitmap image
+                       , pcf_text_height :: Int
+                       -- ^ Height of the rendered bitmap image
+                       , pcf_text_image :: VS.Vector Word8
+                       -- ^ Text rendered as a bitmap image where 0 is opaque and 255 is empty in each cell
+                       }
+
+-- | String represented by PCFText rendering.
+pcf_text_string :: PCFText -> String
+pcf_text_string = map glyph_char . pcf_text_glyphs
+
+-- | ASCII rendering of a whole PCFText string rendering.
+pcf_text_ascii :: PCFText -> String
+pcf_text_ascii = B.unpack . B.intercalate "\n" . map B.concat . transpose . map glyph_ascii_lines_bs . pcf_text_glyphs
