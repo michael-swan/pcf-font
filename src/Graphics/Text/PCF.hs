@@ -76,6 +76,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import qualified Data.IntMap as IntMap
 import Graphics.Text.PCF.Types
+import Codec.Compression.GZip
 
 assert :: Monad m => Bool -> String -> m ()
 assert True  = const $ return ()
@@ -230,13 +231,13 @@ getPCF = do
             GLYPH_NAMES <$> (getWord32 >>= flip replicateM getWord32 . fromIntegral) <*> (getWord32 >>= fmap B.fromStrict . getByteString . fromIntegral)
         return table
 
--- | Load a PCF font file. File should not be compressed (e.g. ".pcf.gz" extension).
+-- | Load a PCF font file. Both uncompressed and GZip compressed files are allowed, i.e. ".pcf" and ".pcf.gz" files.
 loadPCF :: FilePath -> IO (Either String PCF)
 loadPCF filepath = decodePCF <$> B.readFile filepath
 
--- | Decode a PCF font from an in-memory `ByteString`.
+-- | Decode a PCF font from an in-memory `ByteString`. Uncompressed and GZip compressed input are allowed.
 decodePCF :: ByteString -> Either String PCF
-decodePCF = either (Left . extract) (Right . extract) . runGetOrFail getPCF
+decodePCF bs = either (Left . extract) (Right . extract) $ runGetOrFail getPCF $ if B.take 2 bs == "\x1f8b" then decompress bs else bs
     where
         extract (_,_,v) = v
 
