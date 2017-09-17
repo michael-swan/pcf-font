@@ -10,7 +10,7 @@
 -- > import Graphics.Text.PCF
 -- > import System.Environment
 -- >
--- > -- | USAGE: program <font.pcf> <output.png> <text>
+-- > -- | USAGE: program <font.pcf.gz> <output.png> <text>
 -- > main :: IO ()
 -- > main = do
 -- >     [input_file, output_file, text] <- getArgs
@@ -26,7 +26,7 @@
 -- > import Graphics.Text.PCF
 -- > import System.Environment
 -- >
--- > -- | USAGE: program <font.pcf> <text>
+-- > -- | USAGE: program <font.pcf.gz> <text>
 -- > main :: IO ()
 -- > main = do
 -- >     [font_file, text] <- getArgs
