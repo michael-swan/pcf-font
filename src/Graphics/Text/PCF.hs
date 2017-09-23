@@ -42,6 +42,7 @@ module Graphics.Text.PCF (
         decodePCF,
         -- * Rendering
         renderPCFText,
+        renderPCFTextColor,
         getPCFGlyph,
         getPCFGlyphPixel,
         foldPCFGlyphPixels,
@@ -294,14 +295,27 @@ foldPCFGlyphPixels g@PCFGlyph{..} f =
     where
         fold bs f' a = foldl' (flip f') a bs
 
--- | Generate a vector of black and white pixels from a PCF font and a string.
+-- | Generate a vector of black and white pixels from a PCF font and a string. Black and white pixels are represented by 0x00 and 0xFF byte values respectively.
 renderPCFText :: PCF
               -- ^ Font to render with
               -> String
               -- ^ Text to render
               -> Maybe PCFText
               -- ^ `Just` width, height, and rendering; `Nothing` if an unrenderable character is encountered
-renderPCFText pcf@PCF{..} text = do
+renderPCFText pcf = renderPCFTextColor pcf 0x00 0xFF
+
+-- | Generate a vector of opaque and blank pixels from a PCF font and a string.
+renderPCFTextColor :: PCF
+                   -- ^ Font to render with
+                   -> Word8
+                   -- ^ Opaque color value
+                   -> Word8
+                   -- ^ Blank color value
+                   -> String
+                   -- ^ Text to render
+                   -> Maybe PCFText
+                   -- ^ `Just` width, height, and rendering; `Nothing` if an unrenderable character is encountered
+renderPCFTextColor pcf@PCF{..} opaque blank text = do
     glyphs <- mapM (getPCFGlyph pcf) text
     let w = foldl' (\n -> (n +) . fromIntegral . metrics_character_width . glyph_metrics) 0 glyphs
         ascent = foldl' (\n PCFGlyph{..} -> max n (metrics_character_ascent glyph_metrics)) 0 glyphs
@@ -313,4 +327,4 @@ renderPCFText pcf@PCF{..} text = do
     if w * h > 64 * 1024 * 1024 then
         Nothing
     else
-        return (PCFText glyphs w h $ VS.replicate (w * h) 0xFF VS.// (map (,0) $ concat $ updates 0 glyphs))
+        return (PCFText glyphs w h $ VS.replicate (w * h) blank VS.// (map (,opaque) $ concat $ updates 0 glyphs))
