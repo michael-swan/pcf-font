@@ -50,6 +50,10 @@ module Graphics.Text.PCF (
         pcf_text_ascii,
         glyph_ascii,
         glyph_ascii_lines,
+        -- * Braille Rendering
+        pcf_text_braille,
+        glyph_braille,
+        glyph_braille_lines,
         -- * Metadata
         getPCFProps,
         -- * Types

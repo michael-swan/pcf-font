@@ -12,8 +12,11 @@ module Graphics.Text.PCF.Types (
         PCFText(..),
         glyph_ascii,
         glyph_ascii_lines,
+        glyph_braille,
+        glyph_braille_lines,
         pcf_text_string,
-        pcf_text_ascii
+        pcf_text_ascii,
+        pcf_text_braille
     ) where
 
 import Data.Binary
@@ -24,7 +27,8 @@ import Data.List
 import Data.Vector (Vector)
 import Data.IntMap (IntMap)
 import Data.ByteString.Lazy.Char8 (ByteString)
-import qualified Data.ByteString.Lazy as B (concatMap, take)
+import qualified Data.ByteString as B (unfoldrN)
+import qualified Data.ByteString.Lazy as B (concatMap, take, map, index, fromStrict)
 import qualified Data.ByteString.Lazy.Char8 as B (unpack, splitAt, intercalate, concat)
 import qualified Data.Vector.Storable as VS
 
@@ -141,9 +145,18 @@ instance Show PCFGlyph where
 glyph_ascii :: PCFGlyph -> String
 glyph_ascii = B.unpack . mconcat . map (<> "\n") . glyph_ascii_lines_bs
 
+glyph_braille :: PCFGlyph -> String
+glyph_braille = unlines . glyph_braille_lines
+
 -- | Render glyph bitmap as a list of strings representing lines where 'X' represents opaque pixels and whitespace represents blank pixels.
 glyph_ascii_lines :: PCFGlyph -> [String]
 glyph_ascii_lines = map B.unpack . glyph_ascii_lines_bs
+
+-- | Render glyph bitmap as a list of strings representing lines a Braille 2×4 grid of
+--   pixel represents the raster.
+glyph_braille_lines :: PCFGlyph -> [String]
+glyph_braille_lines = map (map (toEnum . (+0x2800) . fromEnum) . B.unpack)
+                       . glyph_braille_lines_bs
 
 glyph_ascii_lines_bs :: PCFGlyph -> [ByteString]
 glyph_ascii_lines_bs PCFGlyph{..} = map (B.take (fromIntegral glyph_width) . showBits) rs
@@ -158,6 +171,30 @@ glyph_ascii_lines_bs PCFGlyph{..} = map (B.take (fromIntegral glyph_width) . sho
         showBit i w
           | testBit w i = "X"
           | otherwise   = " "
+
+glyph_braille_lines_bs :: PCFGlyph -> [ByteString]
+glyph_braille_lines_bs PCFGlyph{..} = map showBits rs
+    where
+        rs = rows 4 glyph_bitmap
+        rows 0 bs = [] : rows 4 bs
+        rows n bs = case B.splitAt (fromIntegral glyph_pitch) bs of
+                (r, "") -> [r : replicate (n-1) (const zeroBits `B.map` r)]
+                (r, t) | rg:rgs <- rows (n-1) t
+                          -> (r:rg) : rgs
+
+        showBits rws = B.fromStrict . fst
+                         $ B.unfoldrN (fromIntegral glyph_width`quot`2) build 0
+         where build x = Just ( assemble $ [ B.index r i `testBit` fromIntegral (8-2*k-o)
+                                           | o <- [0,1]
+                                           , r <- take 3 rws ]
+                                        ++ [ B.index (last rws) i
+                                                         `testBit` fromIntegral (8-2*k-o)
+                                           | o <- [0,1] ]
+                              , x+1 )
+                where (i,k) = x`divMod`4
+                      assemble pixels = foldl' (.|.) zeroBits
+                                          [ bit i | (i,px) <- zip [0..] pixels
+                                                  , px ]
 
 -- | Representation of string and its corresponding bitmap content. Metadata regarding source font is not included.
 data PCFText = PCFText { pcf_text_glyphs :: [PCFGlyph]
@@ -177,3 +214,7 @@ pcf_text_string = map glyph_char . pcf_text_glyphs
 -- | ASCII rendering of a whole PCFText string rendering.
 pcf_text_ascii :: PCFText -> String
 pcf_text_ascii = B.unpack . B.intercalate "\n" . map B.concat . transpose . map glyph_ascii_lines_bs . pcf_text_glyphs
+
+-- | Braille display of a whole PCFText string rendering.
+pcf_text_braille :: PCFText -> String
+pcf_text_braille = unlines . map concat . transpose . map glyph_braille_lines . pcf_text_glyphs
