@@ -29,7 +29,7 @@ import Data.Vector (Vector)
 import Data.IntMap (IntMap)
 import Data.ByteString.Lazy.Char8 (ByteString)
 import qualified Data.ByteString as B (unfoldrN)
-import qualified Data.ByteString.Lazy as B (concatMap, take, map, index, fromStrict)
+import qualified Data.ByteString.Lazy as B (concatMap, take, map, index, fromStrict, length)
 import qualified Data.ByteString.Lazy.Char8 as B (unpack, splitAt, intercalate, concat)
 import qualified Data.Vector.Storable as VS
 
@@ -184,15 +184,18 @@ glyph_braille_lines_bs PCFGlyph{..} = map showBits rs
                           -> (r:rg) : rgs
 
         showBits rws = B.fromStrict . fst
-                         $ B.unfoldrN (fromIntegral glyph_width`quot`2) build 0
-         where build x = Just ( assemble $ [ B.index r i `testBit` fromIntegral (7-2*k-o)
+                         $ B.unfoldrN (fromIntegral glyph_width`quot`2+1) build 0
+         where build x = Just ( assemble $ [ index r i `testBit` fromIntegral (7-2*k-o)
                                            | o <- [0,1]
                                            , r <- take 3 rws ]
-                                        ++ [ B.index (last rws) i
+                                        ++ [ index (last rws) i
                                                          `testBit` fromIntegral (7-2*k-o)
                                            | o <- [0,1] ]
                               , x+1 )
                 where (i,k) = x`divMod`4
+                      index r i
+                       | i < B.length r  = B.index r i
+                       | otherwise       = zeroBits
                       assemble pixels = foldl' (.|.) zeroBits
                                           [ bit i | (i,px) <- zip [0..] pixels
                                                   , px ]
