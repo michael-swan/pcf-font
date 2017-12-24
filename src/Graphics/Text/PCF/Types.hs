@@ -23,6 +23,7 @@ import Data.Binary
 import Data.Bits
 import Data.Int
 import Data.Monoid
+import Data.Ord (comparing)
 import Data.List
 import Data.Vector (Vector)
 import Data.IntMap (IntMap)
@@ -213,8 +214,15 @@ pcf_text_string = map glyph_char . pcf_text_glyphs
 
 -- | ASCII rendering of a whole PCFText string rendering.
 pcf_text_ascii :: PCFText -> String
-pcf_text_ascii = B.unpack . B.intercalate "\n" . map B.concat . transpose . map glyph_ascii_lines_bs . pcf_text_glyphs
+pcf_text_ascii = unlines . map concat . transpose
+            . alignBottom . map (map B.unpack) . map glyph_ascii_lines_bs . pcf_text_glyphs
 
 -- | Braille display of a whole PCFText string rendering.
 pcf_text_braille :: PCFText -> String
-pcf_text_braille = unlines . map concat . transpose . map glyph_braille_lines . pcf_text_glyphs
+pcf_text_braille = unlines . map concat . transpose
+                     . alignBottom . map glyph_braille_lines . pcf_text_glyphs
+
+alignBottom :: [[String]] -> [[String]]
+alignBottom l = map (\c -> replicate (hmax - length c) (map (const ' ') $ head c) ++ c) l
+ where cmax = maximumBy (comparing length) l
+       hmax = length cmax
