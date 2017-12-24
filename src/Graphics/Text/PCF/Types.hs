@@ -185,11 +185,11 @@ glyph_braille_lines_bs PCFGlyph{..} = map showBits rs
 
         showBits rws = B.fromStrict . fst
                          $ B.unfoldrN (fromIntegral glyph_width`quot`2) build 0
-         where build x = Just ( assemble $ [ B.index r i `testBit` fromIntegral (8-2*k-o)
+         where build x = Just ( assemble $ [ B.index r i `testBit` fromIntegral (7-2*k-o)
                                            | o <- [0,1]
                                            , r <- take 3 rws ]
                                         ++ [ B.index (last rws) i
-                                                         `testBit` fromIntegral (8-2*k-o)
+                                                         `testBit` fromIntegral (7-2*k-o)
                                            | o <- [0,1] ]
                               , x+1 )
                 where (i,k) = x`divMod`4
