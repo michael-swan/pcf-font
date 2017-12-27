@@ -23,8 +23,10 @@ import Data.Binary
 import Data.Bits
 import Data.Int
 import Data.Monoid
+import Data.Maybe (fromJust)
 import Data.Ord (comparing)
 import Data.List
+import Control.Arrow (first)
 import Data.Vector (Vector)
 import Data.IntMap (IntMap)
 import Data.ByteString.Lazy.Char8 (ByteString)
@@ -157,7 +159,7 @@ glyph_ascii_lines = map B.unpack . glyph_ascii_lines_bs
 --   pixel represents the raster.
 glyph_braille_lines :: PCFGlyph -> [String]
 glyph_braille_lines = map (map (toEnum . (+0x2800) . fromEnum) . B.unpack)
-                       . glyph_braille_lines_bs
+                       . fst . glyph_braille_lines_bs' False
 
 glyph_ascii_lines_bs :: PCFGlyph -> [ByteString]
 glyph_ascii_lines_bs PCFGlyph{..} = map (B.take (fromIntegral glyph_width) . showBits) rs
@@ -173,8 +175,14 @@ glyph_ascii_lines_bs PCFGlyph{..} = map (B.take (fromIntegral glyph_width) . sho
           | testBit w i = "X"
           | otherwise   = " "
 
+type BrailleHalfShifted = Bool
+
 glyph_braille_lines_bs :: PCFGlyph -> [ByteString]
-glyph_braille_lines_bs PCFGlyph{..} = map showBits rs
+glyph_braille_lines_bs = fst . glyph_braille_lines_bs' False
+
+glyph_braille_lines_bs' :: BrailleHalfShifted -> PCFGlyph -> ([ByteString], BrailleHalfShifted)
+glyph_braille_lines_bs' halfShift PCFGlyph{..}
+               = (map (fst . showBits) rs, odd paddedWidth)
     where
         rs = rows 4 glyph_bitmap
         rows 0 bs = [] : rows 4 bs
@@ -183,19 +191,24 @@ glyph_braille_lines_bs PCFGlyph{..} = map showBits rs
                 (r, t) | rg:rgs <- rows (n-1) t
                           -> (r:rg) : rgs
 
-        showBits rws = B.fromStrict . fst
-                         $ B.unfoldrN (fromIntegral glyph_width`quot`2+1) build 0
-         where build x = Just ( assemble $ [ index r i `testBit` fromIntegral (7-2*k-o)
+        paddedWidth = fromIntegral glyph_width + if halfShift then 1 else 0
+        showBits rws = first B.fromStrict
+                         $ B.unfoldrN (paddedWidth`quot`2+1) build 0
+         where build x = Just ( assemble $ [ index r (7-2*k-o)
                                            | o <- [0,1]
                                            , r <- take 3 rws ]
-                                        ++ [ index (last rws) i
-                                                         `testBit` fromIntegral (7-2*k-o)
+                                        ++ [ index (last rws) (7-2*k-o)
                                            | o <- [0,1] ]
                               , x+1 )
                 where (i,k) = x`divMod`4
-                      index r i
-                       | i < B.length r  = B.index r i
-                       | otherwise       = zeroBits
+                      index r b
+                        | j >= 0 && j < B.length r
+                                          = B.index r j `testBit` fromIntegral (b'`mod`8)
+                        | otherwise       = False
+                       where b' | halfShift  = b+1
+                                | otherwise  = b
+                             j | b'>7       = i-1
+                               | otherwise  = i
                       assemble pixels = foldl' (.|.) zeroBits
                                           [ bit i | (i,px) <- zip [0..] pixels
                                                   , px ]
