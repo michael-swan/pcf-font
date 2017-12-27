@@ -159,8 +159,11 @@ glyph_ascii_lines = map B.unpack . glyph_ascii_lines_bs
 -- | Render glyph bitmap as a list of strings representing lines a Braille 2×4 grid of
 --   pixel represents the raster.
 glyph_braille_lines :: PCFGlyph -> [String]
-glyph_braille_lines = map (map (toEnum . (+0x2800) . fromEnum) . B.unpack)
+glyph_braille_lines = map (map brailleFrom8Bit . B.unpack)
                        . fst . glyph_braille_lines_bs' 0 0
+
+brailleFrom8Bit :: Enum i => i -> Char
+brailleFrom8Bit = toEnum . (.|.0x2800) . fromEnum
 
 glyph_ascii_lines_bs :: PCFGlyph -> [ByteString]
 glyph_ascii_lines_bs PCFGlyph{..} = map (B.take (fromIntegral glyph_width) . showBits) rs
