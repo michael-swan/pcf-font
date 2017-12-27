@@ -14,9 +14,11 @@ module Graphics.Text.PCF.Types (
         glyph_ascii_lines,
         glyph_braille,
         glyph_braille_lines,
+        glyph_braille_lines_bs',
         pcf_text_string,
         pcf_text_ascii,
-        pcf_text_braille
+        pcf_text_braille,
+        brailleFrom8Bit
     ) where
 
 import Data.Binary

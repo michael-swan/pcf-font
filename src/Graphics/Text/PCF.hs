@@ -51,6 +51,7 @@ module Graphics.Text.PCF (
         glyph_ascii,
         glyph_ascii_lines,
         -- * Braille Rendering
+        renderBraillePCF,
         pcf_text_braille,
         glyph_braille,
         glyph_braille_lines,
@@ -332,3 +333,35 @@ renderPCFTextColor pcf@PCF{..} opaque blank text = do
         Nothing
     else
         return (PCFText glyphs w h $ VS.replicate (w * h) blank VS.// (map (,opaque) $ concat $ updates 0 glyphs))
+
+
+renderBraillePCF :: PCF -> String -> String
+renderBraillePCF font = unlines . concatMap (go (repeat [])) . lines
+ where go :: [String] -> String -> [String]
+       go overhang [] = overhang
+       go overhang (c:cs)
+         = let lPad = case overhang of
+                 ([]:_) -> 0
+                 _      -> 1
+               (glyphRendrd, newHangsOver) = case renderPCFText font [c] of
+                  Just glyphs | [glyph] <- pcf_text_glyphs glyphs
+                         -> glyph_braille_lines_bs' lPad 0 glyph
+           in zipWith3 (\hang glLine contin
+                          -> case ( hang
+                                  , brailleFrom8Bit <$> B.unpack glLine
+                                  ) of
+                           ([oh], bh:gl')
+                            | newHangsOver==0  -> toEnum (fromEnum oh.|.fromEnum bh)
+                                                  : gl' ++ contin
+                            | otherwise        -> toEnum (fromEnum oh.|.fromEnum bh)
+                                                  : init gl' ++ contin
+                           ([], bh:gl')
+                            | newHangsOver==0  -> bh : gl' ++ contin
+                            | otherwise        -> bh : init gl' ++ contin )
+                   overhang glyphRendrd
+                   $ go ( if newHangsOver>0
+                           then pure . brailleFrom8Bit . B.last <$> glyphRendrd
+                           else repeat []
+                        ) cs
+
+
