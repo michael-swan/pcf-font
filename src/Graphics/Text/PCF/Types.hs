@@ -31,7 +31,8 @@ import Data.Vector (Vector)
 import Data.IntMap (IntMap)
 import Data.ByteString.Lazy.Char8 (ByteString)
 import qualified Data.ByteString as B (unfoldrN)
-import qualified Data.ByteString.Lazy as B (concatMap, take, map, index, fromStrict, length)
+import qualified Data.ByteString.Lazy as B ( concatMap, take, map, index
+                                           , fromStrict, length, replicate )
 import qualified Data.ByteString.Lazy.Char8 as B (unpack, splitAt, intercalate, concat)
 import qualified Data.Vector.Storable as VS
 
@@ -159,7 +160,7 @@ glyph_ascii_lines = map B.unpack . glyph_ascii_lines_bs
 --   pixel represents the raster.
 glyph_braille_lines :: PCFGlyph -> [String]
 glyph_braille_lines = map (map (toEnum . (+0x2800) . fromEnum) . B.unpack)
-                       . fst . glyph_braille_lines_bs' False
+                       . fst . glyph_braille_lines_bs' 0 0
 
 glyph_ascii_lines_bs :: PCFGlyph -> [ByteString]
 glyph_ascii_lines_bs PCFGlyph{..} = map (B.take (fromIntegral glyph_width) . showBits) rs
@@ -175,23 +176,26 @@ glyph_ascii_lines_bs PCFGlyph{..} = map (B.take (fromIntegral glyph_width) . sho
           | testBit w i = "X"
           | otherwise   = " "
 
-type BrailleHalfShifted = Bool
-
 glyph_braille_lines_bs :: PCFGlyph -> [ByteString]
-glyph_braille_lines_bs = fst . glyph_braille_lines_bs' False
+glyph_braille_lines_bs = fst . glyph_braille_lines_bs' 0 0
 
-glyph_braille_lines_bs' :: BrailleHalfShifted -> PCFGlyph -> ([ByteString], BrailleHalfShifted)
-glyph_braille_lines_bs' halfShift PCFGlyph{..}
-               = (map (fst . showBits) rs, odd paddedWidth)
+glyph_braille_lines_bs'
+    :: Int                  -- ^ Left padding (pixels)
+    -> Int                  -- ^ Top padding
+    -> PCFGlyph             -- ^ Symbol to render
+    -> ([ByteString], Int)  -- ^ Pixels as bits, amount of “overhang” on the right
+glyph_braille_lines_bs' lPadding tPadding PCFGlyph{..}
+               = (map (fst . showBits) rs, if odd paddedWidth then 1 else 0)
     where
-        rs = rows 4 glyph_bitmap
+        rs = rows 4 $ B.replicate (fromIntegral $ glyph_pitch * tPadding) zeroBits
+                         <> glyph_bitmap
         rows 0 bs = [] : rows 4 bs
         rows n bs = case B.splitAt (fromIntegral glyph_pitch) bs of
                 (r, "") -> [r : replicate (n-1) (const zeroBits `B.map` r)]
                 (r, t) | rg:rgs <- rows (n-1) t
                           -> (r:rg) : rgs
 
-        paddedWidth = fromIntegral glyph_width + if halfShift then 1 else 0
+        paddedWidth = fromIntegral glyph_width + lPadding
         showBits rws = first B.fromStrict
                          $ B.unfoldrN (paddedWidth`quot`2+1) build 0
          where build x = Just ( assemble $ [ index r (7-2*k-o)
@@ -205,10 +209,8 @@ glyph_braille_lines_bs' halfShift PCFGlyph{..}
                         | j >= 0 && j < B.length r
                                           = B.index r j `testBit` fromIntegral (b'`mod`8)
                         | otherwise       = False
-                       where b' | halfShift  = b+1
-                                | otherwise  = b
-                             j | b'>7       = i-1
-                               | otherwise  = i
+                       where b' = b + fromIntegral lPadding
+                             j = i - b'`quot`8
                       assemble pixels = foldl' (.|.) zeroBits
                                           [ bit i | (i,px) <- zip [0..] pixels
                                                   , px ]
