@@ -340,11 +340,11 @@ renderBraillePCF font = unlines . concatMap (foldMap (layoutLine . pcf_text_glyp
                                                          . renderPCFText font)
                                 . lines
  where layoutLine :: [PCFGlyph] -> [String]
-       layoutLine line = go 0 h (repeat []) line
-        where h = maximum $ glyph_ascend <$> line
-       go :: Int -> Int -> [String] -> [PCFGlyph] -> [String]
-       go _ _ overhang [] = (\oh -> if null (drop 1 oh) then [] else take 1 oh) <$> overhang
-       go lPad ascend overhang (c:cs)
+       layoutLine line = go 0 asc height (repeat []) line
+        where [asc,height] = maximum . (<$>line) <$> [glyph_ascend, brailleHeight]
+       go :: Int -> Int -> Int -> [String] -> [PCFGlyph] -> [String]
+       go _ _ _ overhang [] = (\oh -> if null (drop 1 oh) then [] else take 1 oh) <$> overhang
+       go lPad ascend height overhang (c:cs)
          = let lPad' = case overhang of
                  ((_:_:_):_) -> lPad+1
                  _           -> lPad
@@ -355,8 +355,12 @@ renderBraillePCF font = unlines . concatMap (foldMap (layoutLine . pcf_text_glyp
                                     else oh .&. bshiftL bh
                                 | (ohc:prev, bhs) <- zip overhang glyphRendrd
                                 , let [oh,bh] = [brailleTo8Bit ohc, B.head bhs] ]
+               bPadded = addPad height glyphRendrd
+                where addPad 0 ls = ls
+                      addPad n (l:ls@(_:_)) = l : addPad (n-1) ls
+                      addPad n [l] = l : addPad (n-1) [B.map (const zeroBits) l]
            in if glyphsTouch
-               then go (lPad+1) ascend overhang (c:cs)
+               then go (lPad+1) ascend height overhang (c:cs)
                else zipWith3 (\hang glLine contin
                           -> case ( hang
                                   , brailleFrom8Bit <$> B.unpack glLine
@@ -371,17 +375,20 @@ renderBraillePCF font = unlines . concatMap (foldMap (layoutLine . pcf_text_glyp
                             | newHangsOver==0 || null gl'
                                                -> bh : gl' ++ contin
                             | otherwise        -> bh : init gl' ++ contin )
-                   overhang glyphRendrd
-                   $ go 0 ascend
+                   overhang bPadded
+                   $ go 0 ascend height
                         ( if newHangsOver>0
-                           then map brailleFrom8Bit . B.unpack . last2 <$> glyphRendrd
-                           else pure . brailleFrom8Bit . B.last <$> glyphRendrd
+                           then map brailleFrom8Bit . B.unpack . last2 <$> bPadded
+                           else pure . brailleFrom8Bit . B.last <$> bPadded
                         ) cs
        
        bshiftL :: Word8 -> Word8
        bshiftL bc = (bc.&.0x38)`shiftR`3 .|. (bc.&.0x80)`shiftR`1
-       glyph_ascend :: PCFGlyph -> Int
+       glyph_ascend, brailleHeight :: PCFGlyph -> Int
        glyph_ascend gl = fromIntegral (metrics_character_ascent $ glyph_metrics gl)
+       brailleHeight gl = - (- glyph_ascend gl
+                             - fromIntegral (metrics_character_descent $ glyph_metrics gl)
+                            )`div`4
 
 
 last2 :: ByteString -> ByteString
