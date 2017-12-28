@@ -336,16 +336,20 @@ renderPCFTextColor pcf@PCF{..} opaque blank text = do
 
 
 renderBraillePCF :: PCF -> String -> String
-renderBraillePCF font = unlines . concatMap (go (repeat [])) . lines
- where go :: [String] -> String -> [String]
-       go overhang [] = overhang
-       go overhang (c:cs)
+renderBraillePCF font = unlines . concatMap (foldMap (layoutLine . pcf_text_glyphs)
+                                                         . renderPCFText font)
+                                . lines
+ where layoutLine :: [PCFGlyph] -> [String]
+       layoutLine line = go h (repeat []) line
+        where h = maximum $ glyph_height <$> line
+       go :: Int -> [String] -> [PCFGlyph] -> [String]
+       go _ overhang [] = overhang
+       go height overhang (c:cs)
          = let lPad = case overhang of
                  ([]:_) -> 0
                  _      -> 1
-               (glyphRendrd, newHangsOver) = case renderPCFText font [c] of
-                  Just glyphs | [glyph] <- pcf_text_glyphs glyphs
-                         -> glyph_braille_lines_bs' lPad 0 glyph
+               (glyphRendrd, newHangsOver)
+                   = glyph_braille_lines_bs' lPad (height - glyph_height c) c
            in zipWith3 (\hang glLine contin
                           -> case ( hang
                                   , brailleFrom8Bit <$> B.unpack glLine
@@ -359,7 +363,8 @@ renderBraillePCF font = unlines . concatMap (go (repeat [])) . lines
                             | newHangsOver==0  -> bh : gl' ++ contin
                             | otherwise        -> bh : init gl' ++ contin )
                    overhang glyphRendrd
-                   $ go ( if newHangsOver>0
+                   $ go height
+                        ( if newHangsOver>0
                            then pure . brailleFrom8Bit . B.last <$> glyphRendrd
                            else repeat []
                         ) cs
