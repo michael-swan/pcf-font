@@ -202,7 +202,7 @@ glyph_braille_lines_bs' lPadding tPadding PCFGlyph{..}
 
         paddedWidth = fromIntegral glyph_width + lPadding
         showBits rws = first B.fromStrict
-                         $ B.unfoldrN (paddedWidth`quot`2+1) build 0
+                         $ B.unfoldrN ((paddedWidth+1)`quot`2) build 0
          where build x = Just ( assemble $ [ index r (7-2*k-o)
                                            | o <- [0,1]
                                            , r <- take 3 rws ]
