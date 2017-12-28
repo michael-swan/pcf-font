@@ -355,12 +355,14 @@ renderBraillePCF font = unlines . concatMap (foldMap (layoutLine . pcf_text_glyp
                                   , brailleFrom8Bit <$> B.unpack glLine
                                   ) of
                            ([oh], bh:gl')
-                            | newHangsOver==0  -> toEnum (fromEnum oh.|.fromEnum bh)
+                            | newHangsOver==0 || null gl'
+                                               -> toEnum (fromEnum oh.|.fromEnum bh)
                                                   : gl' ++ contin
                             | otherwise        -> toEnum (fromEnum oh.|.fromEnum bh)
                                                   : init gl' ++ contin
                            ([], bh:gl')
-                            | newHangsOver==0  -> bh : gl' ++ contin
+                            | newHangsOver==0 || null gl'
+                                               -> bh : gl' ++ contin
                             | otherwise        -> bh : init gl' ++ contin )
                    overhang glyphRendrd
                    $ go height
