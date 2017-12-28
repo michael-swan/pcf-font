@@ -18,7 +18,8 @@ module Graphics.Text.PCF.Types (
         pcf_text_string,
         pcf_text_ascii,
         pcf_text_braille,
-        brailleFrom8Bit
+        brailleFrom8Bit,
+        brailleTo8Bit
     ) where
 
 import Data.Binary
@@ -166,6 +167,9 @@ glyph_braille_lines = map (map brailleFrom8Bit . B.unpack)
 
 brailleFrom8Bit :: Enum i => i -> Char
 brailleFrom8Bit = toEnum . (.|.0x2800) . fromEnum
+
+brailleTo8Bit :: Enum i => Char -> i
+brailleTo8Bit = toEnum . (.&.0xFF) . fromEnum
 
 glyph_ascii_lines_bs :: PCFGlyph -> [ByteString]
 glyph_ascii_lines_bs PCFGlyph{..} = map (B.take (fromIntegral glyph_width) . showBits) rs

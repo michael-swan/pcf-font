@@ -340,35 +340,47 @@ renderBraillePCF font = unlines . concatMap (foldMap (layoutLine . pcf_text_glyp
                                                          . renderPCFText font)
                                 . lines
  where layoutLine :: [PCFGlyph] -> [String]
-       layoutLine line = go h (repeat []) line
+       layoutLine line = go 0 h (repeat []) line
         where h = maximum $ glyph_height <$> line
-       go :: Int -> [String] -> [PCFGlyph] -> [String]
-       go _ overhang [] = overhang
-       go height overhang (c:cs)
-         = let lPad = case overhang of
-                 ([]:_) -> 0
-                 _      -> 1
+       go :: Int -> Int -> [String] -> [PCFGlyph] -> [String]
+       go _ _ overhang [] = (\oh -> if null (drop 1 oh) then [] else take 1 oh) <$> overhang
+       go lPad height overhang (c:cs)
+         = let lPad' = case overhang of
+                 ((_:_:_):_) -> lPad+1
+                 _           -> lPad
                (glyphRendrd, newHangsOver)
-                   = glyph_braille_lines_bs' lPad (height - glyph_height c) c
-           in zipWith3 (\hang glLine contin
+                   = glyph_braille_lines_bs' lPad' (height - glyph_height c) c
+               glyphsTouch = or [ zeroBits /= if null prev
+                                    then bshiftL oh .&. bh
+                                    else oh .&. bshiftL bh
+                                | (ohc:prev, bhs) <- zip overhang glyphRendrd
+                                , let [oh,bh] = [brailleTo8Bit ohc, B.head bhs] ]
+           in if glyphsTouch
+               then go (lPad+1) height overhang (c:cs)
+               else zipWith3 (\hang glLine contin
                           -> case ( hang
                                   , brailleFrom8Bit <$> B.unpack glLine
                                   ) of
-                           ([oh], bh:gl')
+                           ([oh,_], bh:gl')
                             | newHangsOver==0 || null gl'
                                                -> toEnum (fromEnum oh.|.fromEnum bh)
                                                   : gl' ++ contin
                             | otherwise        -> toEnum (fromEnum oh.|.fromEnum bh)
                                                   : init gl' ++ contin
-                           ([], bh:gl')
+                           (_, bh:gl')
                             | newHangsOver==0 || null gl'
                                                -> bh : gl' ++ contin
                             | otherwise        -> bh : init gl' ++ contin )
                    overhang glyphRendrd
-                   $ go height
+                   $ go 0 height
                         ( if newHangsOver>0
-                           then pure . brailleFrom8Bit . B.last <$> glyphRendrd
-                           else repeat []
+                           then map brailleFrom8Bit . B.unpack . last2 <$> glyphRendrd
+                           else pure . brailleFrom8Bit . B.last <$> glyphRendrd
                         ) cs
+       
+       bshiftL :: Word8 -> Word8
+       bshiftL bc = (bc.&.0x38)`shiftR`3 .|. (bc.&.0x80)`shiftR`1
 
 
+last2 :: ByteString -> ByteString
+last2 = B.take 2 . B.reverse
