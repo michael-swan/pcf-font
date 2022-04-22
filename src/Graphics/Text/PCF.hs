@@ -79,7 +79,7 @@ import qualified Data.IntMap as IntMap
 import Graphics.Text.PCF.Types
 import Codec.Compression.GZip
 
-assert :: Monad m => Bool -> String -> m ()
+assert :: MonadFail m => Bool -> String -> m ()
 assert True  = const $ return ()
 assert False = fail
 
