@@ -7,7 +7,7 @@ license:             BSD3
 license-file:        LICENSE
 author:              Michael Swan
 maintainer:          mswan@fastmail.com
-copyright:           (c) 2017 Michael Swan
+copyright:           (c) 2022 Michael Swan
 category:            Graphics
 build-type:          Simple
 extra-source-files:  README.md
@@ -17,7 +17,7 @@ library
   hs-source-dirs:      src
   exposed-modules:     Graphics.Text.PCF
   other-modules:       Graphics.Text.PCF.Types
-  build-depends:       base >= 4.7 && < 5
+  build-depends:       base >= 4.9 && < 5
                      , bytestring
                      , binary
                      , containers

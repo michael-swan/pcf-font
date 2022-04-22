@@ -1,3 +1,5 @@
+# 0.2.2.1
+- Apply MonadFail fix
 # 0.2.2.0
 - Add renderPCFTextColor function.
 # 0.2.1.1
