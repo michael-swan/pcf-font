@@ -69,7 +69,6 @@ import qualified Data.Map.Strict as M
 import Control.Monad
 import Control.Applicative
 import Data.ByteString.Lazy (ByteString)
-import Data.Vector ((!?))
 import GHC.Exts
 import Data.Char
 import qualified Data.ByteString.Lazy as B
@@ -103,8 +102,8 @@ getPCFProps PCF{..} = flip map properties_props $ \Prop{..} ->
 getPCFGlyph :: PCF -> Char -> Maybe PCFGlyph
 getPCFGlyph PCF{..} c = do
         glyph_index <- fromIntegral <$> IntMap.lookup (ord c) encodings_glyph_indices
-        offset      <- fromIntegral <$> (bitmaps_offsets !? glyph_index)
-        m@Metrics{..} <- metrics_metrics !? glyph_index
+        offset      <- fromIntegral <$> (bitmaps_offsets V.!? glyph_index)
+        m@Metrics{..} <- metrics_metrics V.!? glyph_index
         let cols = fromIntegral $ metrics_right_sided_bearings - metrics_left_sided_bearings
             rows = fromIntegral $ metrics_character_ascent + metrics_character_descent
         pitch <- case tableMetaGlyphPad meta_bitmaps of
